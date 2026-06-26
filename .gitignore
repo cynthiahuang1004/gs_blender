@@ -1,0 +1,27 @@
+# Byte-compiled / cache
+__pycache__/
+*.py[cod]
+
+# Virtual environments
+.venv/
+venv/
+
+# OS files
+.DS_Store
+
+# Rendered outputs and data
+renders/
+renders_line_angle/
+old_version/renders_version1
+**/dmaps/
+**/norms/
+*.npy
+
+# Backup files
+gelsight_sampler_old.blend
+gelsight_sampler.blend1
+
+# Logs
+nohup.out
+
+

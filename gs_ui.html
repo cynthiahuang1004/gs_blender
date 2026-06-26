@@ -1,0 +1,793 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>GelSight Parameter Studio</title>
+<style>
+:root {
+  --bg:       #0d0d1a;
+  --panel:    #151526;
+  --panel2:   #1c1c35;
+  --border:   #2a2a50;
+  --accent:   #5b8ff7;
+  --accent2:  #7c6ff7;
+  --text:     #dde0f0;
+  --dim:      #7070a0;
+  --success:  #4fd18a;
+  --warn:     #f7c94f;
+  --danger:   #f7504f;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: 'Segoe UI', system-ui, sans-serif;
+  font-size: 13px;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* ── Scrollbar ── */
+::-webkit-scrollbar { width: 4px; height: 4px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+/* ── Header ── */
+header {
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+  padding: 9px 16px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+}
+header h1 {
+  font-size: 15px;
+  font-weight: 700;
+  background: linear-gradient(90deg, var(--accent), var(--accent2));
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+.badge {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 9px;
+  font-weight: 500;
+}
+.badge-idle  { background:#ffffff18; color:var(--dim); }
+.badge-busy  { background:#f7c94f22; color:var(--warn); }
+.badge-done  { background:#4fd18a22; color:var(--success); }
+.badge-error { background:#f7504f22; color:var(--danger); }
+.badge-bo    { background:#5b8ff722; color:var(--accent); }
+
+/* ── Main layout ── */
+main {
+  flex: 1;
+  display: grid;
+  grid-template-columns: 360px 1fr;
+  overflow: hidden;
+  min-height: 0;
+}
+
+/* ── Left params panel (overall scroll) ── */
+#params-panel {
+  border-right: 1px solid var(--border);
+  overflow-y: auto;
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+/* ── Sections ── */
+.sec {
+  background: var(--panel);
+  border-radius: 7px;
+  border: 1px solid var(--border);
+  overflow: hidden;
+  flex-shrink: 0;
+}
+.sec-hdr {
+  padding: 8px 11px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--dim);
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  user-select: none;
+  flex-shrink: 0;
+}
+.sec-hdr:hover { background: #ffffff06; }
+.sec-hdr .arrow { transition: transform 0.15s; font-size: 10px; }
+.sec-hdr.collapsed .arrow { transform: rotate(-90deg); }
+
+/* Each section body has its OWN scroll */
+.sec-body {
+  padding: 9px 11px;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  max-height: 320px;
+  overflow-y: auto;
+}
+.sec-body.hidden { display: none; }
+
+/* ── Light group ── */
+.light-grp {
+  background: var(--panel2);
+  border-radius: 5px;
+  padding: 7px 9px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  flex-shrink: 0;
+}
+.light-name {
+  font-size: 11px;
+  color: var(--dim);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
+}
+.dot { width: 9px; height: 9px; border-radius: 50%; flex-shrink: 0; }
+
+/* ── Light position group (distinct look) ── */
+.pos-grp {
+  background: #1a1a3a;
+  border: 1px solid #3a3a60;
+  border-radius: 5px;
+  padding: 7px 9px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  flex-shrink: 0;
+}
+.pos-grp-title {
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--accent2);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 1px;
+}
+
+/* ── Param row ── */
+.prow {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  height: 22px;
+  flex-shrink: 0;
+}
+.plabel {
+  width: 72px;
+  flex-shrink: 0;
+  color: var(--dim);
+  font-size: 11px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.prow input[type=range] {
+  flex: 1;
+  height: 3px;
+  accent-color: var(--accent);
+  cursor: pointer;
+  min-width: 0;
+}
+.pval {
+  width: 50px;
+  text-align: right;
+  font-family: 'Consolas', monospace;
+  font-size: 11px;
+  color: var(--text);
+  flex-shrink: 0;
+}
+input[type=color] {
+  width: 34px;
+  height: 20px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: none;
+  cursor: pointer;
+  padding: 1px;
+  flex-shrink: 0;
+}
+
+/* ── Right preview panel ── */
+#preview-panel {
+  overflow-y: auto;
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* ── Preview section (no fixed height, scrolls with panel) ── */
+.sec-body-free {
+  padding: 9px 11px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* ── Preview images ── */
+.preview-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  align-items: start;
+}
+.pbox-wrap { display: flex; flex-direction: column; gap: 4px; }
+.pbox {
+  background: #0a0a18;
+  border-radius: 7px;
+  border: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  /* height controlled by JS slider */
+}
+.pbox img { width: 100%; height: 100%; object-fit: contain; display: block; }
+.pbox-label {
+  font-size: 11px;
+  color: var(--dim);
+  text-align: center;
+}
+.pbox-placeholder {
+  text-align: center;
+  color: var(--dim);
+  font-size: 12px;
+  line-height: 1.6;
+  padding: 20px 12px;
+}
+.spinner {
+  width: 26px; height: 26px;
+  border: 2px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* ── Buttons ── */
+.ctrl-row {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.btn {
+  padding: 5px 13px;
+  border-radius: 5px;
+  border: none;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+  transition: opacity 0.12s, transform 0.1s;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.btn:active:not(:disabled) { transform: scale(0.97); }
+.btn:disabled { opacity: 0.35; cursor: not-allowed; }
+.btn-primary { background: var(--accent);  color: #fff; }
+.btn-primary:hover:not(:disabled) { opacity: 0.85; }
+.btn-success { background: var(--success); color: #0d1a0d; }
+.btn-success:hover:not(:disabled) { opacity: 0.85; }
+.btn-danger  { background: var(--danger);  color: #fff; }
+.btn-danger:hover:not(:disabled)  { opacity: 0.85; }
+.btn-ghost   { background: transparent; border: 1px solid var(--border); color: var(--text); }
+.btn-ghost:hover:not(:disabled)   { background: #ffffff0c; }
+
+select, input[type=number] {
+  background: #0a0a18;
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 4px 7px;
+  font-size: 12px;
+}
+select { cursor: pointer; }
+
+.elapsed { font-size: 11px; color: var(--dim); }
+
+/* ── BO log ── */
+.bo-log {
+  background: #08080f;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  padding: 8px 10px;
+  height: 180px;
+  overflow-y: auto;
+  font-family: 'Consolas', monospace;
+  font-size: 11px;
+  color: #70d090;
+  white-space: pre-wrap;
+  word-break: break-all;
+  resize: vertical;
+}
+
+/* ── Size slider row ── */
+.size-row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 11px;
+  color: var(--dim);
+}
+.size-row input[type=range] {
+  width: 90px;
+  height: 3px;
+  accent-color: var(--accent2);
+  cursor: pointer;
+}
+</style>
+</head>
+<body>
+
+<!-- ── Header ── -->
+<header>
+  <h1>⬡ GelSight Parameter Studio</h1>
+  <span id="render-badge" class="badge badge-idle">Idle</span>
+  <div style="margin-left:auto;display:flex;gap:6px">
+    <button class="btn btn-ghost" onclick="loadParams()">↺ Reload</button>
+    <button class="btn btn-ghost" onclick="saveParams()">💾 Save Params</button>
+    <button class="btn btn-primary" id="btn-bg" onclick="renderBg()">Render BG</button>
+  </div>
+</header>
+
+<main>
+
+<!-- ══════════ LEFT: Params panel ══════════ -->
+<div id="params-panel">
+
+  <!-- Lights (each sub-group + position, scrollable body) -->
+  <div class="sec">
+    <div class="sec-hdr" onclick="toggleSec(this)">
+      <span>💡 Lights</span><span class="arrow">▾</span>
+    </div>
+    <!-- This body scrolls independently -->
+    <div class="sec-body" id="sec-lights">
+      <!-- 6 light groups injected by JS -->
+
+      <!-- Light array position (always at bottom of lights) -->
+      <div class="pos-grp">
+        <div class="pos-grp-title">📍 Array Position</div>
+        <div class="prow">
+          <span class="plabel">Rotate Z</span>
+          <input type="range" id="p-light_rot_z" min="-3.1416" max="3.1416" step="0.01" value="-3.14159"
+                 oninput="setVal(this,'v-light_rot_z',3)">
+          <span id="v-light_rot_z" class="pval">-3.142</span>
+        </div>
+        <div class="prow">
+          <span class="plabel">Y Scale</span>
+          <input type="range" id="p-scale" min="0.10" max="1.0" step="0.001" value="0.4918"
+                 oninput="setVal(this,'v-scale',4)">
+          <span id="v-scale" class="pval">0.4918</span>
+        </div>
+        <div style="font-size:10px;color:var(--dim);padding:1px 0 0 0">
+          Y Scale controls both emittor spread and Z height of array
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Gel Material -->
+  <div class="sec">
+    <div class="sec-hdr" onclick="toggleSec(this)">
+      <span>🔮 Gel Material</span><span class="arrow">▾</span>
+    </div>
+    <div class="sec-body">
+      <div class="prow">
+        <span class="plabel">Roughness</span>
+        <input type="range" id="p-gel_roughness" min="0" max="1" step="0.005" value="0.4455"
+               oninput="setVal(this,'v-gel_roughness',3)">
+        <span id="v-gel_roughness" class="pval">0.446</span>
+      </div>
+      <div class="prow">
+        <span class="plabel">Mix Fac</span>
+        <input type="range" id="p-gel_fac" min="0" max="1" step="0.005" value="0.2971"
+               oninput="setVal(this,'v-gel_fac',3)">
+        <span id="v-gel_fac" class="pval">0.297</span>
+      </div>
+      <div class="prow">
+        <span class="plabel">Smoothness</span>
+        <input type="range" id="p-smoothness" min="10" max="80" step="1" value="30"
+               oninput="setVal(this,'v-smoothness',0)">
+        <span id="v-smoothness" class="pval">30</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Camera -->
+  <div class="sec">
+    <div class="sec-hdr" onclick="toggleSec(this)">
+      <span>📷 Camera</span><span class="arrow">▾</span>
+    </div>
+    <div class="sec-body">
+      <div class="prow">
+        <span class="plabel">FOV (°)</span>
+        <input type="range" id="p-fov" min="20" max="90" step="0.5" value="60"
+               oninput="setVal(this,'v-fov',1)">
+        <span id="v-fov" class="pval">60.0</span>
+      </div>
+      <div class="prow">
+        <span class="plabel">Length (m)</span>
+        <input type="range" id="p-length" min="0.004" max="0.015" step="0.0001" value="0.008751"
+               oninput="setVal(this,'v-length',5)">
+        <span id="v-length" class="pval">0.00875</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Post FX -->
+  <div class="sec">
+    <div class="sec-hdr" onclick="toggleSec(this)">
+      <span>✨ Post FX</span><span class="arrow">▾</span>
+    </div>
+    <div class="sec-body">
+      <div class="prow">
+        <span class="plabel">Saturation</span>
+        <input type="range" id="p-sat_boost" min="0.5" max="3.0" step="0.05" value="1.4"
+               oninput="setVal(this,'v-sat_boost',2)">
+        <span id="v-sat_boost" class="pval">1.40</span>
+      </div>
+      <div class="prow">
+        <span class="plabel">Blur σ</span>
+        <input type="range" id="p-blur_sigma" min="0" max="5" step="0.05" value="1.25"
+               oninput="setVal(this,'v-blur_sigma',2)">
+        <span id="v-blur_sigma" class="pval">1.25</span>
+      </div>
+      <div class="prow">
+        <span class="plabel">Blur Falloff</span>
+        <input type="range" id="p-blur_falloff" min="0.5" max="4" step="0.05" value="1.5"
+               oninput="setVal(this,'v-blur_falloff',2)">
+        <span id="v-blur_falloff" class="pval">1.50</span>
+      </div>
+      <div class="prow">
+        <span class="plabel">Vignette</span>
+        <input type="range" id="p-vignette" min="0" max="1" step="0.01" value="0.25"
+               oninput="setVal(this,'v-vignette',2)">
+        <span id="v-vignette" class="pval">0.25</span>
+      </div>
+      <div class="prow">
+        <span class="plabel">Barrel K1</span>
+        <input type="range" id="p-barrel_k1" min="0" max="0.5" step="0.005" value="0.07"
+               oninput="setVal(this,'v-barrel_k1',3)">
+        <span id="v-barrel_k1" class="pval">0.070</span>
+      </div>
+    </div>
+  </div>
+
+</div><!-- end params-panel -->
+
+
+<!-- ══════════ RIGHT: Preview panel ══════════ -->
+<div id="preview-panel">
+
+  <!-- Preview images -->
+  <div class="sec">
+    <div class="sec-hdr">
+      <span>🖼 Preview</span>
+      <!-- Size slider in header -->
+      <div class="size-row" onclick="event.stopPropagation()">
+        <span>Size</span>
+        <input type="range" id="preview-size" min="120" max="500" value="260"
+               oninput="setPreviewSize(this.value)">
+      </div>
+    </div>
+    <!-- No max-height here — this section is free-flowing -->
+    <div class="sec-body-free">
+      <div class="preview-row" id="preview-row">
+        <div class="pbox-wrap">
+          <div class="pbox" id="pbox-bg">
+            <div class="pbox-placeholder">Sim BG Tactile<br><small>Click "Render BG"</small></div>
+          </div>
+          <div class="pbox-label">Sim BG Tactile</div>
+        </div>
+        <div class="pbox-wrap">
+          <div class="pbox" id="pbox-real">
+            <div class="pbox-placeholder">Real BG Tactile<br><small>Upload a real image below</small></div>
+          </div>
+          <div class="pbox-label">Real BG Tactile</div>
+        </div>
+      </div>
+
+      <!-- Real image upload + render button row -->
+      <div class="ctrl-row">
+        <label class="btn btn-ghost" style="cursor:pointer">
+          📂 Upload Real Image
+          <input type="file" id="real-upload" accept="image/*" style="display:none"
+                 onchange="loadRealImage(this)">
+        </label>
+        <span id="real-filename" class="elapsed">— no file —</span>
+        <span id="elapsed" class="elapsed" style="margin-left:auto"></span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Bayesian Optimization -->
+  <div class="sec">
+    <div class="sec-hdr"><span>🔬 Bayesian Optimization</span></div>
+    <div class="sec-body-free">
+      <div class="ctrl-row">
+        <button class="btn btn-success" id="btn-bo-start" onclick="boStart()">▶ Start BO</button>
+        <button class="btn btn-danger"  id="btn-bo-stop"  onclick="boStop()" disabled>■ Stop</button>
+        <button class="btn btn-ghost" onclick="saveParams()">💾 Save Params First</button>
+        <span id="bo-badge" class="badge badge-idle">Idle</span>
+      </div>
+      <!-- bo-log has resize:vertical so the user can drag it taller -->
+      <div class="bo-log" id="bo-log">— BO output will appear here —
+</div>
+    </div>
+  </div>
+
+</div><!-- end preview-panel -->
+</main>
+
+<script>
+// ── Light definitions ────────────────────────────────────────
+const LIGHTS = [
+  { key:'top',   label:'BL Emittor (Bottom Left)', defColor:'#4DA64D', defStr:80  },
+  { key:'bot',   label:'TR Emittor (Top Right)',    defColor:'#1A7AE6', defStr:40  },
+  { key:'left',  label:'TL Emittor (Top Left)',     defColor:'#E63030', defStr:30  },
+  { key:'right', label:'BR Emittor (Bottom Right)', defColor:'#FF0000', defStr:120 },
+  { key:'lg',    label:'R Emittor',                 defColor:'#4DA64D', defStr:60  },
+  { key:'rg',    label:'L Emittor',                 defColor:'#4DB84D', defStr:120 },
+];
+
+// ── Build light controls ─────────────────────────────────────
+function buildLights() {
+  const container = document.getElementById('sec-lights');
+  const posGrp    = container.querySelector('.pos-grp');  // keep at end
+  LIGHTS.forEach(L => {
+    const div = document.createElement('div');
+    div.className = 'light-grp';
+    div.innerHTML = `
+      <div class="light-name">
+        <span class="dot" id="dot-${L.key}" style="background:${L.defColor}"></span>
+        ${L.label}
+      </div>
+      <div class="prow">
+        <span class="plabel">Strength</span>
+        <input type="range" id="p-${L.key}_str" min="0" max="250" step="1" value="${L.defStr}"
+               oninput="setVal(this,'v-${L.key}_str',0)">
+        <span id="v-${L.key}_str" class="pval">${L.defStr}</span>
+      </div>
+      <div class="prow">
+        <span class="plabel">Color</span>
+        <input type="color" id="p-${L.key}_col" value="${L.defColor}"
+               oninput="syncDot('${L.key}')">
+        <span style="font-size:10px;color:var(--dim);margin-left:2px">R G B (0–1 each)</span>
+      </div>`;
+    container.insertBefore(div, posGrp);
+  });
+}
+
+function syncDot(key) {
+  document.getElementById(`dot-${key}`).style.background =
+    document.getElementById(`p-${key}_col`).value;
+}
+
+// ── Section toggle ────────────────────────────────────────────
+function toggleSec(hdr) {
+  const body = hdr.nextElementSibling;
+  hdr.classList.toggle('collapsed');
+  body.classList.toggle('hidden');
+}
+
+// ── Param helpers ────────────────────────────────────────────
+function setVal(el, vId, dec) {
+  document.getElementById(vId).textContent = parseFloat(el.value).toFixed(dec);
+}
+
+function hexToRgb(hex) {
+  return [
+    parseInt(hex.slice(1,3),16)/255,
+    parseInt(hex.slice(3,5),16)/255,
+    parseInt(hex.slice(5,7),16)/255,
+  ];
+}
+
+function rgbToHex(r,g,b) {
+  const h = x => Math.round(Math.min(1,Math.max(0,x))*255).toString(16).padStart(2,'0');
+  return `#${h(r)}${h(g)}${h(b)}`;
+}
+
+function collectParams() {
+  const P = {};
+  LIGHTS.forEach(L => {
+    P[`${L.key}_str`] = parseFloat(document.getElementById(`p-${L.key}_str`).value);
+    const [r,g,b] = hexToRgb(document.getElementById(`p-${L.key}_col`).value);
+    P[`${L.key}_r`] = r;  P[`${L.key}_g`] = g;  P[`${L.key}_b`] = b;
+  });
+  for (const k of [
+    'light_rot_z','scale',
+    'gel_roughness','gel_fac','smoothness',
+    'fov','length',
+    'sat_boost','blur_sigma','blur_falloff','vignette','barrel_k1',
+  ]) {
+    const el = document.getElementById(`p-${k}`);
+    if (el) P[k] = parseFloat(el.value);
+  }
+  return P;
+}
+
+function applyParams(P) {
+  LIGHTS.forEach(L => {
+    const sEl = document.getElementById(`p-${L.key}_str`);
+    if (sEl && P[`${L.key}_str`] != null) {
+      sEl.value = P[`${L.key}_str`];
+      setVal(sEl, `v-${L.key}_str`, 0);
+    }
+    const cEl = document.getElementById(`p-${L.key}_col`);
+    if (cEl && P[`${L.key}_r`] != null) {
+      cEl.value = rgbToHex(P[`${L.key}_r`], P[`${L.key}_g`], P[`${L.key}_b`]);
+      syncDot(L.key);
+    }
+  });
+  const others = [
+    ['light_rot_z',3],['scale',4],
+    ['gel_roughness',3],['gel_fac',3],['smoothness',0],
+    ['fov',1],['length',5],
+    ['sat_boost',2],['blur_sigma',2],['blur_falloff',2],['vignette',2],['barrel_k1',3],
+  ];
+  for (const [k,dec] of others) {
+    const el = document.getElementById(`p-${k}`);
+    if (el && P[k] != null) {
+      el.value = P[k];
+      const vEl = document.getElementById(`v-${k}`);
+      if (vEl) vEl.textContent = parseFloat(P[k]).toFixed(dec);
+    }
+  }
+}
+
+// ── Preview size ──────────────────────────────────────────────
+function setPreviewSize(px) {
+  document.querySelectorAll('.pbox').forEach(b => {
+    b.style.height = px + 'px';
+    b.style.width  = '100%';
+  });
+}
+
+// ── Render ───────────────────────────────────────────────────
+let _busy = false;
+
+function setRenderBusy(busy) {
+  _busy = busy;
+  document.getElementById('btn-bg').disabled = busy;
+  const badge = document.getElementById('render-badge');
+  badge.textContent = busy ? 'Rendering…' : 'Idle';
+  badge.className   = 'badge ' + (busy ? 'badge-busy' : 'badge-idle');
+}
+
+async function renderBg() {
+  if (_busy) return;
+  setRenderBusy(true);
+  const box = document.getElementById('pbox-bg');
+  box.innerHTML = '<div class="spinner"></div>';
+  document.getElementById('elapsed').textContent = '';
+
+  try {
+    const t0   = Date.now();
+    const resp = await fetch('/render', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mode: 'bg', params: collectParams() }),
+    });
+    if (!resp.ok) {
+      const err = await resp.text();
+      box.innerHTML = `<div class="pbox-placeholder" style="color:var(--danger)">
+        Error<br><small style="font-size:10px">${escHtml(err).slice(0,300)}</small></div>`;
+      return;
+    }
+    const data = await resp.json();
+    box.innerHTML = `<img src="data:image/png;base64,${data.image}" alt="sim render">`;
+    document.getElementById('elapsed').textContent = `Rendered in ${data.elapsed}s`;
+  } catch(e) {
+    box.innerHTML = `<div class="pbox-placeholder" style="color:var(--danger)">Network error</div>`;
+  } finally {
+    setRenderBusy(false);
+  }
+}
+
+// Load real image from disk (client-side FileReader, no server round-trip)
+function loadRealImage(input) {
+  const file = input.files[0];
+  if (!file) return;
+  document.getElementById('real-filename').textContent = file.name;
+  const reader = new FileReader();
+  reader.onload = e => {
+    const box = document.getElementById('pbox-real');
+    box.innerHTML = `<img src="${e.target.result}" alt="real image">`;
+  };
+  reader.readAsDataURL(file);
+}
+
+// ── Save / load params ────────────────────────────────────────
+async function saveParams() {
+  const P    = collectParams();
+  const resp = await fetch('/params/save', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ params: P }),
+  });
+  const data = await resp.json();
+  if (data.status === 'saved') {
+    const badge = document.getElementById('render-badge');
+    const prev  = [badge.textContent, badge.className];
+    badge.textContent = '✓ Saved';  badge.className = 'badge badge-done';
+    setTimeout(() => { badge.textContent = prev[0]; badge.className = prev[1]; }, 1800);
+  }
+}
+
+async function loadParams() {
+  try {
+    const resp = await fetch('/params');
+    if (resp.ok) applyParams(await resp.json());
+  } catch(e) {}
+}
+
+// ── BO ────────────────────────────────────────────────────────
+let _boEvt = null;
+
+async function boStart() {
+  const resp = await fetch('/bo/start', { method: 'POST' });
+  if (!resp.ok) { alert('BO already running or error'); return; }
+
+  document.getElementById('btn-bo-start').disabled = true;
+  document.getElementById('btn-bo-stop').disabled  = false;
+  const badge = document.getElementById('bo-badge');
+  badge.textContent = 'Running';  badge.className = 'badge badge-bo';
+
+  const log = document.getElementById('bo-log');
+  log.textContent = '';
+
+  _boEvt = new EventSource('/bo/stream');
+  _boEvt.onmessage = e => {
+    if (e.data === '__DONE__')  { boFinished('Done',    'badge-done');  return; }
+    if (e.data === '__PING__')  { return; }
+    log.textContent += e.data + '\n';
+    log.scrollTop    = log.scrollHeight;
+  };
+  _boEvt.onerror = () => boFinished('Error', 'badge-error');
+}
+
+function boFinished(label, cls) {
+  if (_boEvt) { _boEvt.close(); _boEvt = null; }
+  document.getElementById('btn-bo-start').disabled = false;
+  document.getElementById('btn-bo-stop').disabled  = true;
+  const badge = document.getElementById('bo-badge');
+  badge.textContent = label;  badge.className = 'badge ' + cls;
+}
+
+async function boStop() {
+  await fetch('/bo/stop', { method: 'POST' });
+  boFinished('Stopped', 'badge-idle');
+}
+
+function escHtml(s) {
+  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+// ── Init ─────────────────────────────────────────────────────
+async function init() {
+  buildLights();
+  setPreviewSize(260);
+  await loadParams();
+}
+init();
+</script>
+</body>
+</html>

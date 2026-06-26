@@ -1,0 +1,75 @@
+import os
+import numpy as np
+import cv2
+import shutil
+
+root_dir = os.environ.get('GELSIGHT_RENDER_DIR', os.path.join(os.path.dirname(__file__), 'renders'))
+
+
+def dmap2norm(dmap):
+    zx = cv2.Sobel(dmap, cv2.CV_64F, 1, 0, ksize=5)
+    zy = cv2.Sobel(dmap, cv2.CV_64F, 0, 1, ksize=5)
+    normals = np.dstack((-zx, -zy, np.ones_like(dmap)))
+    length = np.linalg.norm(normals, axis=2, keepdims=True)
+    normals /= length
+    normals += 1
+    normals /= 2
+    return normals[:, :, ::-1].astype(np.float32)
+
+
+# 掃描所有 session
+sessions = sorted([s for s in os.listdir(root_dir) if s.startswith('session_')])
+
+# 如果沒有 session 資料夾，退回原本的行為（直接掃 sensor_）
+if not sessions:
+    sessions_dirs = [root_dir]
+else:
+    sessions_dirs = [os.path.join(root_dir, s) for s in sessions]
+
+for session_dir in sessions_dirs:
+    sensors = sorted([s for s in os.listdir(session_dir) if s.startswith('sensor_')])
+    
+    for sensor in sensors:
+        change_dir = os.path.join(session_dir, sensor)
+        raw_depth_dir = os.path.join(change_dir, 'raw_data')
+        dmaps_dir = os.path.join(change_dir, 'dmaps')
+        norms_dir = os.path.join(change_dir, 'norms')
+
+        if not os.path.exists(raw_depth_dir):
+            continue
+
+        if os.path.exists(norms_dir): shutil.rmtree(norms_dir)
+        if os.path.exists(dmaps_dir): shutil.rmtree(dmaps_dir)
+        os.mkdir(norms_dir)
+        os.mkdir(dmaps_dir)
+
+        raw_depths = sorted([f for f in os.listdir(raw_depth_dir) if f.endswith('.npy')])
+        print(f'Processing {session_dir}/{sensor}: {len(raw_depths)} files')
+
+        for raw in raw_depths:
+            raw_path = os.path.join(raw_depth_dir, raw)
+            dmap_dir = os.path.join(dmaps_dir, raw.replace('.npy', '.png'))
+            norm_dir = os.path.join(norms_dir, raw.replace('.npy', '.png'))
+
+            data = np.load(raw_path)
+
+            dmap = data.copy()
+            dmin = dmap[dmap > 0].min() if np.any(dmap > 0) else 0
+            dmax = dmap.max()
+            if dmax > dmin:
+                dmap_norm = np.zeros_like(dmap)
+                dmap_norm[dmap > 0] = (dmap[dmap > 0] - dmin) / (dmax - dmin)
+            else:
+                dmap_norm = np.zeros_like(dmap)
+
+            cv2.imwrite(dmap_dir, (dmap_norm * 255).astype(np.uint8))
+
+            if '_gt' in raw:
+                norm = dmap2norm(dmap_norm)
+            else:
+                norm = dmap2norm(1.0 - dmap_norm)
+
+            norm = np.clip(norm, 0, 1)
+            cv2.imwrite(norm_dir, (norm * 255).astype(np.uint8))
+
+print('Post-processing complete.')

@@ -1,0 +1,357 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<title>3D OBJ Viewer</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: #1a1a1a; color: #eee; font-family: sans-serif; height: 100vh; display: flex; flex-direction: column; }
+
+  #toolbar {
+    display: flex; align-items: center; gap: 12px;
+    padding: 10px 16px;
+    background: #242424;
+    border-bottom: 1px solid #333;
+    flex-shrink: 0;
+  }
+  #toolbar h1 { font-size: 14px; font-weight: 500; color: #ccc; }
+
+  #drop-zone {
+    border: 1.5px dashed #555;
+    border-radius: 6px;
+    padding: 6px 14px;
+    font-size: 13px;
+    color: #888;
+    cursor: pointer;
+    transition: border-color 0.2s, color 0.2s;
+  }
+  #drop-zone.hover { border-color: #7F77DD; color: #AFA9EC; }
+  #drop-zone input { display: none; }
+
+  #info { font-size: 12px; color: #666; margin-left: auto; }
+  #filename { font-size: 13px; color: #AFA9EC; font-weight: 500; }
+
+  #controls {
+    display: flex; gap: 8px; align-items: center;
+  }
+  button {
+    background: #333; border: 1px solid #444; color: #ccc;
+    font-size: 12px; padding: 4px 10px; border-radius: 4px;
+    cursor: pointer;
+  }
+  button:hover { background: #444; }
+  button.active { background: #534AB7; border-color: #7F77DD; color: #fff; }
+
+  #canvas-wrap { flex: 1; position: relative; overflow: hidden; }
+  canvas { display: block; width: 100% !important; height: 100% !important; }
+
+  #overlay {
+    position: absolute; inset: 0;
+    display: flex; flex-direction: column;
+    align-items: center; justify-content: center;
+    gap: 12px; pointer-events: none;
+  }
+  #overlay .icon { font-size: 48px; opacity: 0.2; }
+  #overlay p { font-size: 14px; color: #555; }
+
+  #stats {
+    position: absolute; bottom: 12px; left: 16px;
+    font-size: 12px; color: #555; line-height: 1.8;
+  }
+
+  #hint {
+    position: absolute; bottom: 12px; right: 16px;
+    font-size: 11px; color: #444; line-height: 1.8; text-align: right;
+  }
+
+  #loading {
+    position: absolute; inset: 0;
+    display: none; align-items: center; justify-content: center;
+    background: rgba(26,26,26,0.8); font-size: 14px; color: #888;
+  }
+</style>
+</head>
+<body>
+
+<div id="toolbar">
+  <h1>3D Viewer</h1>
+
+  <div id="drop-zone" onclick="document.getElementById('file-input').click()">
+    &#128193; 開啟 .obj 檔案
+    <input type="file" id="file-input" accept=".obj,.ply">
+  </div>
+
+  <span id="filename"></span>
+
+  <div id="controls">
+    <button id="btn-solid" class="active" onclick="setMode('solid')">實體</button>
+    <button id="btn-wire" onclick="setMode('wire')">線框</button>
+    <button id="btn-point" onclick="setMode('point')">點雲</button>
+    <button onclick="resetCamera()">重置視角</button>
+  </div>
+
+  <span id="info">拖放 .obj 或 .ply 檔案到視窗</span>
+</div>
+
+<div id="canvas-wrap">
+  <div id="overlay">
+    <div class="icon">&#128247;</div>
+    <p>拖放 .obj 或 .ply 檔案到這裡</p>
+    <p style="font-size:12px;">或點上方按鈕開啟檔案</p>
+  </div>
+  <div id="loading">載入中...</div>
+  <div id="stats"></div>
+  <div id="hint">
+    左鍵拖曳：旋轉<br>
+    右鍵拖曳：平移<br>
+    滾輪：縮放
+  </div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+const { Scene, PerspectiveCamera, WebGLRenderer, DirectionalLight, AmbientLight,
+        MeshPhongMaterial, MeshBasicMaterial, PointsMaterial,
+        Points, Mesh, WireframeGeometry, LineSegments, LineBasicMaterial,
+        Box3, Vector3, Color, GridHelper, AxesHelper } = THREE;
+
+let scene, camera, renderer, currentMesh, currentWire, currentPoints;
+let mode = 'solid';
+let mouse = { x: 0, y: 0, btn: -1 };
+let spherical = { theta: 0.4, phi: 1.0, radius: 5 };
+let target = new Vector3();
+
+const wrap = document.getElementById('canvas-wrap');
+
+function init() {
+  scene = new Scene();
+  scene.background = new Color(0x1a1a1a);
+
+  camera = new PerspectiveCamera(45, wrap.clientWidth / wrap.clientHeight, 0.0001, 10000);
+
+  renderer = new WebGLRenderer({ antialias: true });
+  renderer.setPixelRatio(window.devicePixelRatio);
+  renderer.setSize(wrap.clientWidth, wrap.clientHeight);
+  wrap.appendChild(renderer.domElement);
+
+  const amb = new AmbientLight(0xffffff, 0.4);
+  scene.add(amb);
+  const dir1 = new DirectionalLight(0xffffff, 0.8);
+  dir1.position.set(1, 2, 3);
+  scene.add(dir1);
+  const dir2 = new DirectionalLight(0x8080ff, 0.3);
+  dir2.position.set(-2, -1, -1);
+  scene.add(dir2);
+
+  updateCamera();
+  animate();
+}
+
+function animate() {
+  requestAnimationFrame(animate);
+  renderer.render(scene, camera);
+}
+
+function updateCamera() {
+  const { theta, phi, radius } = spherical;
+  camera.position.set(
+    target.x + radius * Math.sin(phi) * Math.sin(theta),
+    target.y + radius * Math.cos(phi),
+    target.z + radius * Math.sin(phi) * Math.cos(theta)
+  );
+  camera.lookAt(target);
+}
+
+function resetCamera() {
+  spherical = { theta: 0.4, phi: 1.0, radius: 5 };
+  target.set(0, 0, 0);
+  updateCamera();
+}
+
+function setMode(m) {
+  mode = m;
+  ['solid','wire','point'].forEach(id => {
+    document.getElementById('btn-'+id).classList.toggle('active', id === m);
+  });
+  if (!currentMesh) return;
+  currentMesh.visible = (m === 'solid');
+  currentWire.visible = (m === 'wire');
+  currentPoints.visible = (m === 'point');
+}
+
+function loadGeometry(geometry, name) {
+  if (currentMesh) { scene.remove(currentMesh); scene.remove(currentWire); scene.remove(currentPoints); }
+
+  geometry.computeVertexNormals();
+  geometry.computeBoundingBox();
+  const box = geometry.boundingBox;
+  const center = new Vector3();
+  box.getCenter(center);
+  const size = new Vector3();
+  box.getSize(size);
+  const maxDim = Math.max(size.x, size.y, size.z);
+  const scale = 2 / maxDim;
+
+  geometry.translate(-center.x, -center.y, -center.z);
+  geometry.scale(scale, scale, scale);
+
+  const mat = new MeshPhongMaterial({ color: 0x9090c0, specular: 0x222244, shininess: 40 });
+  currentMesh = new Mesh(geometry, mat);
+
+  const wireMat = new LineBasicMaterial({ color: 0x7F77DD, linewidth: 1 });
+  const wireGeo = new WireframeGeometry(geometry);
+  currentWire = new LineSegments(wireGeo, wireMat);
+
+  const ptMat = new PointsMaterial({ color: 0x5DCAA5, size: 0.01 });
+  currentPoints = new Points(geometry, ptMat);
+
+  scene.add(currentMesh);
+  scene.add(currentWire);
+  scene.add(currentPoints);
+
+  setMode(mode);
+
+  spherical.radius = 3;
+  target.set(0, 0, 0);
+  updateCamera();
+
+  document.getElementById('overlay').style.display = 'none';
+  document.getElementById('filename').textContent = name;
+
+  const verts = geometry.attributes.position.count;
+  const faces = geometry.index ? geometry.index.count / 3 : verts / 3;
+  document.getElementById('stats').innerHTML =
+    `頂點：${verts.toLocaleString()}<br>面：${Math.round(faces).toLocaleString()}<br>` +
+    `尺寸：${(size.x/scale*1000).toFixed(1)} × ${(size.y/scale*1000).toFixed(1)} × ${(size.z/scale*1000).toFixed(1)} mm`;
+}
+
+function parseOBJ(text) {
+  const positions = [];
+  const indices = [];
+  const verts = [];
+
+  for (const line of text.split('\n')) {
+    const parts = line.trim().split(/\s+/);
+    if (parts[0] === 'v') {
+      verts.push(parseFloat(parts[1]), parseFloat(parts[2]), parseFloat(parts[3]));
+    } else if (parts[0] === 'f') {
+      const face = parts.slice(1).map(p => parseInt(p.split('/')[0]) - 1);
+      for (let i = 1; i < face.length - 1; i++) {
+        indices.push(face[0], face[i], face[i+1]);
+      }
+    }
+  }
+
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3));
+  geo.setIndex(indices);
+  return geo;
+}
+
+function parsePLY(buffer) {
+  const text = new TextDecoder().decode(new Uint8Array(buffer, 0, 1000));
+  const lines = text.split('\n');
+  let vertCount = 0, faceCount = 0, headerEnd = 0, isBinary = false;
+
+  for (let i = 0; i < lines.length; i++) {
+    const l = lines[i].trim();
+    if (l.startsWith('element vertex')) vertCount = parseInt(l.split(' ')[2]);
+    if (l.startsWith('element face')) faceCount = parseInt(l.split(' ')[2]);
+    if (l.includes('binary')) isBinary = true;
+    if (l === 'end_header') { headerEnd = i; break; }
+  }
+
+  const fullText = new TextDecoder().decode(buffer);
+  const allLines = fullText.split('\n');
+  const dataStart = headerEnd + 1;
+
+  const verts = [];
+  for (let i = dataStart; i < dataStart + vertCount; i++) {
+    const p = allLines[i].trim().split(/\s+/);
+    verts.push(parseFloat(p[0]), parseFloat(p[1]), parseFloat(p[2]));
+  }
+
+  const idxArr = [];
+  for (let i = dataStart + vertCount; i < dataStart + vertCount + faceCount; i++) {
+    const p = allLines[i].trim().split(/\s+/).map(Number);
+    const n = p[0];
+    for (let j = 1; j < n - 1; j++) idxArr.push(p[1], p[1+j], p[1+j+1]);
+  }
+
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3));
+  if (idxArr.length > 0) geo.setIndex(idxArr);
+  return geo;
+}
+
+function handleFile(file) {
+  document.getElementById('loading').style.display = 'flex';
+  const reader = new FileReader();
+  const name = file.name;
+  const ext = name.split('.').pop().toLowerCase();
+
+  if (ext === 'obj') {
+    reader.onload = e => {
+      const geo = parseOBJ(e.target.result);
+      loadGeometry(geo, name);
+      document.getElementById('loading').style.display = 'none';
+    };
+    reader.readAsText(file);
+  } else if (ext === 'ply') {
+    reader.onload = e => {
+      const geo = parsePLY(e.target.result);
+      loadGeometry(geo, name);
+      document.getElementById('loading').style.display = 'none';
+    };
+    reader.readAsArrayBuffer(file);
+  }
+}
+
+document.getElementById('file-input').addEventListener('change', e => {
+  if (e.target.files[0]) handleFile(e.target.files[0]);
+});
+
+const canvasWrap = document.getElementById('canvas-wrap');
+canvasWrap.addEventListener('dragover', e => { e.preventDefault(); document.getElementById('drop-zone').classList.add('hover'); });
+canvasWrap.addEventListener('dragleave', () => document.getElementById('drop-zone').classList.remove('hover'));
+canvasWrap.addEventListener('drop', e => {
+  e.preventDefault();
+  document.getElementById('drop-zone').classList.remove('hover');
+  if (e.dataTransfer.files[0]) handleFile(e.dataTransfer.files[0]);
+});
+
+canvasWrap.addEventListener('mousedown', e => { mouse.btn = e.button; mouse.x = e.clientX; mouse.y = e.clientY; });
+canvasWrap.addEventListener('mouseup', () => { mouse.btn = -1; });
+canvasWrap.addEventListener('mousemove', e => {
+  if (mouse.btn === -1) return;
+  const dx = e.clientX - mouse.x;
+  const dy = e.clientY - mouse.y;
+  mouse.x = e.clientX; mouse.y = e.clientY;
+
+  if (mouse.btn === 0) {
+    spherical.theta -= dx * 0.005;
+    spherical.phi = Math.max(0.05, Math.min(Math.PI - 0.05, spherical.phi - dy * 0.005));
+  } else if (mouse.btn === 2) {
+    const panSpeed = spherical.radius * 0.001;
+    target.x -= dx * panSpeed;
+    target.y += dy * panSpeed;
+  }
+  updateCamera();
+});
+canvasWrap.addEventListener('wheel', e => {
+  spherical.radius *= (1 + e.deltaY * 0.001);
+  spherical.radius = Math.max(0.01, Math.min(1000, spherical.radius));
+  updateCamera();
+}, { passive: true });
+canvasWrap.addEventListener('contextmenu', e => e.preventDefault());
+
+window.addEventListener('resize', () => {
+  camera.aspect = wrap.clientWidth / wrap.clientHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(wrap.clientWidth, wrap.clientHeight);
+});
+
+init();
+</script>
+</body>
+</html>
