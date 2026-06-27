@@ -11,6 +11,7 @@ venv/
 
 # Rendered outputs and data
 renders/
+!renders/**/session.json
 renders_line_angle/
 old_version/renders_version1
 **/dmaps/
