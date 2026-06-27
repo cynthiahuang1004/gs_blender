@@ -13,6 +13,7 @@ RGB_OUT    : output path without .png extension
 """
 
 import bpy, os, math, json
+import numpy as np
 from mathutils import Matrix
 
 PARAMS_PATH = os.environ.get('RGB_PARAMS', '')
@@ -131,5 +132,94 @@ scene.render.image_settings.color_mode  = 'RGB'
 scene.render.filepath = OUT_PATH
 scene.frame_set(0)
 bpy.ops.render.render(write_still=True)
+
+# ── Post-FX (barrel, radial blur, vignette) ────────────────────
+def _barrel(img, k1):
+    H, W = img.shape[:2]
+    cx, cy = W / 2.0, H / 2.0
+    yy, xx = np.mgrid[0:H, 0:W].astype(np.float32)
+    xn = (xx - cx) / cx; yn = (yy - cy) / cy
+    r2 = xn**2 + yn**2; fac = 1.0 + k1 * r2
+    xs = np.clip(xn * fac * cx + cx, 0, W - 1)
+    ys = np.clip(yn * fac * cy + cy, 0, H - 1)
+    x0 = np.floor(xs).astype(int); x1 = np.minimum(x0 + 1, W - 1)
+    y0 = np.floor(ys).astype(int); y1 = np.minimum(y0 + 1, H - 1)
+    wx = (xs - x0)[:, :, None]; wy = (ys - y0)[:, :, None]
+    return (img[y0, x0] * (1-wy) * (1-wx) + img[y0, x1] * (1-wy) * wx +
+            img[y1, x0] * wy * (1-wx) + img[y1, x1] * wy * wx)
+
+def _gauss_blur(img, sigma):
+    if sigma <= 0:
+        return img.copy()
+    radius = max(1, int(3 * sigma))
+    x = np.arange(-radius, radius + 1, dtype=np.float32)
+    k = np.exp(-x**2 / (2 * sigma**2)); k /= k.sum()
+    out = np.zeros_like(img)
+    for c in range(img.shape[2]):
+        h = np.apply_along_axis(lambda r: np.convolve(r, k, mode='same'), 1, img[:,:,c])
+        out[:,:,c] = np.apply_along_axis(lambda r: np.convolve(r, k, mode='same'), 0, h)
+    return np.clip(out, 0.0, 1.0)
+
+def _boost_sat_center(rgb, factor, dist):
+    if abs(factor - 1.0) < 0.01:
+        return rgb
+    gray = 0.299 * rgb[:,:,0] + 0.587 * rgb[:,:,1] + 0.114 * rgb[:,:,2]
+    gray = gray[:,:,None]
+    center_w = np.clip(1.0 - dist, 0, 1)[:,:,None] ** 2
+    local_fac = 1.0 + (factor - 1.0) * center_w
+    return np.clip(gray + (rgb - gray) * local_fac, 0, 1)
+
+png_path = OUT_PATH + '.png'
+try:
+    if os.path.exists(png_path):
+        img_bpy = bpy.data.images.load(png_path)
+        W2, H2 = img_bpy.size[0], img_bpy.size[1]
+        px = np.array(img_bpy.pixels[:], dtype=np.float32).reshape(H2, W2, 4)
+        bpy.data.images.remove(img_bpy)
+
+        k1       = float(P.get('barrel_k1',    0.07))
+        sigma    = float(P.get('blur_sigma',   1.25))
+        vign     = float(P.get('vignette',     0.25))
+        tint_r   = float(P.get('tint_r',       0.85))
+        tint_g   = float(P.get('tint_g',       0.70))
+        tint_b   = float(P.get('tint_b',       0.25))
+        tint_str = float(P.get('tint_strength',0.25))
+        tint_cx  = float(P.get('tint_cx',      0.0))
+        tint_cy  = float(P.get('tint_cy',      0.0))
+        sat      = float(P.get('sat_boost',    1.2))
+        haze     = float(P.get('haze_opacity', 0.10))
+        falloff  = 1.5
+
+        rgb = _barrel(px[:,:,:3], k1)
+        blurred = _gauss_blur(rgb, sigma)
+        cy3, cx3 = H2 / 2.0, W2 / 2.0
+        yy3, xx3 = np.mgrid[0:H2, 0:W2]
+        tcx = cx3 + tint_cx * cx3
+        tcy = cy3 + tint_cy * cy3
+        dist = np.sqrt(((yy3 - tcy) / cy3)**2 + ((xx3 - tcx) / cx3)**2)
+        weight = np.clip(dist ** falloff, 0, 1)[:,:,None]
+        rgb = rgb * (1 - weight) + blurred * weight
+        tint_color = np.array([[[tint_r, tint_g, tint_b]]], dtype=np.float32)
+        tint_w = np.clip(dist ** 2 * tint_str, 0, 1)[:,:,None]
+        rgb = rgb * (1 - tint_w) + tint_color * tint_w
+        haze_w = np.clip(dist ** 1.5 * haze, 0, 1)[:,:,None]
+        rgb = rgb * (1 - haze_w) + tint_color * 0.7 * haze_w
+        rgb = _boost_sat_center(rgb, sat, dist)
+        mask = np.clip(1.0 - dist**2 * vign, 0, 1)[:,:,None]
+        rgb = np.clip(rgb * mask, 0, 1)
+
+        out_bpy = bpy.data.images.new('_fx_tmp', W2, H2, alpha=False)
+        out_px = np.ones((H2, W2, 4), dtype=np.float32)
+        out_px[:,:,:3] = rgb
+        out_bpy.pixels = out_px.flatten().tolist()
+        out_bpy.filepath_raw = png_path
+        out_bpy.file_format = 'PNG'
+        out_bpy.save()
+        bpy.data.images.remove(out_bpy)
+        print(f'[gs_rgb_render] post-FX applied → {png_path}', flush=True)
+except Exception as _e:
+    import traceback; traceback.print_exc()
+    print(f'[gs_rgb_render] post-FX ERROR: {_e}', flush=True)
+
 print(f'[gs_rgb_render] saved → {OUT_PATH}')
 import os as _os; _os._exit(0)
