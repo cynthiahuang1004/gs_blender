@@ -112,14 +112,14 @@ def _worker(args):
     return (str(session_dir), ok)
 
 
-def collect_sessions(obj_filter=None):
+def collect_sessions(obj_filter=None, reverse=False):
     sessions = []
-    for obj_dir in sorted(RENDERS_ROOT.iterdir()):
+    for obj_dir in sorted(RENDERS_ROOT.iterdir(), reverse=reverse):
         if not obj_dir.is_dir():
             continue
         if obj_filter and obj_dir.name not in obj_filter:
             continue
-        for session_dir in sorted(obj_dir.iterdir()):
+        for session_dir in sorted(obj_dir.iterdir(), reverse=reverse):
             if session_dir.is_dir() and session_dir.name.startswith('session_'):
                 sessions.append(session_dir)
     return sessions
@@ -133,12 +133,15 @@ def main():
                         help='Only render these object(s) (e.g. button edge)')
     parser.add_argument('--gpus', type=str, default='0',
                         help='Comma-separated GPU IDs (e.g. 0,1,2,3)')
+    parser.add_argument('--reverse', action='store_true',
+                        help='Process objects in reverse alphabetical order')
     args = parser.parse_args()
 
     gpu_ids = [int(g) for g in args.gpus.split(',')]
     n_workers = len(gpu_ids)
 
-    sessions = collect_sessions(obj_filter=set(args.obj) if args.obj else None)
+    sessions = collect_sessions(obj_filter=set(args.obj) if args.obj else None,
+                                reverse=args.reverse)
     total    = len(sessions)
     n_done   = sum(1 for s in sessions if is_complete(s))
     todo     = [s for s in sessions if not is_complete(s)]

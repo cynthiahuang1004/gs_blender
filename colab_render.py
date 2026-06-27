@@ -113,7 +113,7 @@ env = os.environ.copy()
 env['COLAB_GPU'] = '1'   # trigger CUDA patch in scripting.py
 
 proc = subprocess.run(
-    ['python', 'render_dataset.py', '--gpus', gpus_arg],
+    ['python', 'render_dataset.py', '--gpus', gpus_arg, '--reverse'],
     env=env,
     cwd=PROJECT,
 )
