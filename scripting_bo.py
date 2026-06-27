@@ -5,7 +5,7 @@ Minimal Blender script for Bayesian optimization background renders.
 Reads GELSIGHT_FIXED_PARAMS and GELSIGHT_BG_RENDER env vars,
 applies sensor parameters, renders one flat-gel background image, then exits.
 
-Called by bo_optimize.py via:
+Called by bo_tactile.py via:
     blender --background gelsight_sampler.blend --python scripting_bo.py
 """
 

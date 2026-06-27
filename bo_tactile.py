@@ -1,6 +1,6 @@
 """
-bo_optimize.py
-==============
+bo_tactile.py
+=============
 Bayesian optimization to find GelSight sensor parameters that minimize the
 visual difference between a simulated background render and real sensor
 baseline images.
@@ -19,7 +19,7 @@ Pipeline
 Usage
 -----
     pip install scikit-optimize opencv-python matplotlib
-    python bo_optimize.py
+    python bo_tactile.py
 
 After convergence, use the saved final_params.json as the fixed sensor
 configuration (set GELSIGHT_FIXED_PARAMS env var before running Blender).

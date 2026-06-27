@@ -31,7 +31,7 @@ BLEND_FILE    = SCRIPT_DIR / 'gelsight_sampler.blend'
 RENDER_SCRIPT = SCRIPT_DIR / 'gs_ui_render.py'
 FINAL_PARAMS  = SCRIPT_DIR / 'bo_results' / 'final_params.json'
 MESH_DIR      = SCRIPT_DIR / 'meshes'
-BO_SCRIPT     = SCRIPT_DIR / 'bo_optimize.py'
+BO_SCRIPT     = SCRIPT_DIR / 'bo_tactile.py'
 
 # ── Default parameters ─────────────────────────────────────────
 # All values match scripting_bo.py / scripting.py current calibration

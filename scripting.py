@@ -98,6 +98,9 @@ RGB_PARAMS_PATH = os.environ.get(
 )
 BG_RENDER_PATH    = os.environ.get('GELSIGHT_BG_RENDER', None)
 
+import tempfile as _tempfile
+_SESSION_TMP_DIR = _tempfile.mkdtemp(prefix='gs_render_')
+
 # Load RGB BO params (falls back to hardcoded defaults if file missing)
 _rgb_bo = {}
 if RGB_PARAMS_PATH and os.path.exists(RGB_PARAMS_PATH):
@@ -144,6 +147,16 @@ def _gaussian_blur_ch(img, sigma):
         out[:,:,c] = np.apply_along_axis(lambda r: np.convolve(r, k, mode='same'), 0, h)
     return np.clip(out, 0.0, 1.0)
 
+def _boost_sat_center(rgb, factor, dist):
+    if abs(factor - 1.0) < 0.01:
+        return rgb
+    gray = 0.299 * rgb[:,:,0] + 0.587 * rgb[:,:,1] + 0.114 * rgb[:,:,2]
+    gray = gray[:,:,None]
+    center_w = np.clip(1.0 - dist, 0, 1)[:,:,None] ** 2
+    local_fac = 1.0 + (factor - 1.0) * center_w
+    return np.clip(gray + (rgb - gray) * local_fac, 0, 1)
+
+
 def _gel_fx(png_path):
     img_bpy = bpy.data.images.load(png_path)
     W, H = img_bpy.size[0], img_bpy.size[1]
@@ -153,9 +166,17 @@ def _gel_fx(png_path):
     blurred = _gaussian_blur_ch(rgb, RGB_BLUR_SIGMA)
     cy3, cx3 = H / 2.0, W / 2.0
     yy3, xx3 = np.mgrid[0:H, 0:W]
-    dist3 = np.sqrt(((yy3-cy3)/cy3)**2 + ((xx3-cx3)/cx3)**2)
+    tcx = cx3 + RGB_TINT_CX * cx3
+    tcy = cy3 + RGB_TINT_CY * cy3
+    dist3 = np.sqrt(((yy3-tcy)/cy3)**2 + ((xx3-tcx)/cx3)**2)
     weight = np.clip(dist3 ** RGB_BLUR_FALLOFF, 0, 1)[:,:,None]
     rgb = rgb * (1 - weight) + blurred * weight
+    tint_color = np.array([[[RGB_TINT_R, RGB_TINT_G, RGB_TINT_B]]], dtype=np.float32)
+    tint_w = np.clip(dist3 ** 2 * RGB_TINT_STR, 0, 1)[:,:,None]
+    rgb = rgb * (1 - tint_w) + tint_color * tint_w
+    haze_w = np.clip(dist3 ** 1.5 * RGB_HAZE_OPACITY, 0, 1)[:,:,None]
+    rgb = rgb * (1 - haze_w) + tint_color * 0.7 * haze_w
+    rgb = _boost_sat_center(rgb, RGB_SAT_BOOST, dist3)
     mask = np.clip(1.0 - dist3**2 * RGB_VIGNETTE, 0, 1)[:,:,None]
     rgb = np.clip(rgb * mask, 0, 1)
     out_img = bpy.data.images.new('_gel_tmp', W, H, alpha=False)
@@ -722,7 +743,7 @@ class create_sensor():
             set_emittor('BREmittor', self.emittors[3][0] * 5, self.emittors[3][1])
 
 def get_depth(dir) -> None:
-    import tempfile, glob
+    import glob
 
     scene = bpy.context.scene
     tree = scene.node_tree
@@ -731,14 +752,13 @@ def get_depth(dir) -> None:
     fo_node = tree.nodes.new('CompositorNodeOutputFile')
     fo_node.format.file_format = 'OPEN_EXR'
     fo_node.format.color_depth = '32'
-    tmp_dir = tempfile.gettempdir()
-    fo_node.base_path = tmp_dir
+    fo_node.base_path = _SESSION_TMP_DIR
     fo_node.file_slots[0].path = 'gs_depth_tmp_'
 
     tree.links.new(rl_node.outputs['Depth'], fo_node.inputs[0])
     bpy.ops.render.render(write_still=False)
 
-    exr_files = sorted(glob.glob(os.path.join(tmp_dir, 'gs_depth_tmp_*.exr')))
+    exr_files = sorted(glob.glob(os.path.join(_SESSION_TMP_DIR, 'gs_depth_tmp_*.exr')))
     exr_path = exr_files[-1]
     exr_img = bpy.data.images.load(exr_path)
     w, h = exr_img.size
@@ -762,7 +782,7 @@ def get_depth(dir) -> None:
 
 
 def get_gt_depth(dir, obj_name) -> None:
-    import tempfile, glob
+    import glob
 
     gel_objects = ['GelSurface', 'InterfaceSurface', 'EpoxySurface']
     gel_visibility = {}
@@ -780,14 +800,13 @@ def get_gt_depth(dir, obj_name) -> None:
     fo_node = tree.nodes.new('CompositorNodeOutputFile')
     fo_node.format.file_format = 'OPEN_EXR'
     fo_node.format.color_depth = '32'
-    tmp_dir = tempfile.gettempdir()
-    fo_node.base_path = tmp_dir
+    fo_node.base_path = _SESSION_TMP_DIR
     fo_node.file_slots[0].path = 'gs_gt_depth_tmp_'
 
     tree.links.new(rl_node.outputs['Depth'], fo_node.inputs[0])
     bpy.ops.render.render(write_still=False)
 
-    exr_files = sorted(glob.glob(os.path.join(tmp_dir, 'gs_gt_depth_tmp_*.exr')))
+    exr_files = sorted(glob.glob(os.path.join(_SESSION_TMP_DIR, 'gs_gt_depth_tmp_*.exr')))
     exr_path = exr_files[-1]
     exr_img = bpy.data.images.load(exr_path)
     w, h = exr_img.size
@@ -920,10 +939,18 @@ RGB_CAM_Z       = -0.085
 RGB_DOF_FOCUS   = 0.085
 RGB_DOF_FSTOP   = _rgb_bo.get('dof_fstop',      1.2)
 RGB_WORLD_STR   = _rgb_bo.get('world_strength',  2.0)
-RGB_BARREL_K1   = _rgb_bo.get('barrel_k1',       0.07)
-RGB_VIGNETTE    = _rgb_bo.get('vignette',         0.25)
-RGB_BLUR_SIGMA  = _rgb_bo.get('blur_sigma',       1.25)
+RGB_BARREL_K1    = _rgb_bo.get('barrel_k1',       0.07)
+RGB_VIGNETTE     = _rgb_bo.get('vignette',        0.25)
+RGB_BLUR_SIGMA   = _rgb_bo.get('blur_sigma',      1.25)
 RGB_BLUR_FALLOFF = 1.5
+RGB_TINT_R       = _rgb_bo.get('tint_r',          0.85)
+RGB_TINT_G       = _rgb_bo.get('tint_g',          0.70)
+RGB_TINT_B       = _rgb_bo.get('tint_b',          0.25)
+RGB_TINT_STR     = _rgb_bo.get('tint_strength',   0.25)
+RGB_TINT_CX      = _rgb_bo.get('tint_cx',         0.0)
+RGB_TINT_CY      = _rgb_bo.get('tint_cy',         0.0)
+RGB_SAT_BOOST    = _rgb_bo.get('sat_boost',        1.2)
+RGB_HAZE_OPACITY = _rgb_bo.get('haze_opacity',    0.10)
 RGB_HIDE_NAMES  = ['GelSurface', 'InterfaceSurface', 'EpoxySurface',
                    'LightSurfaceBL', 'LightSurfaceTR',
                    'LightSurfaceTL', 'LightSurfaceBR',
@@ -1319,6 +1346,9 @@ if __name__ == '__main__':
         bpy.ops.object.select_all(action='DESELECT')
         bpy.data.objects[obj_name].select_set(True)
         bpy.ops.object.delete()
+
+    import shutil as _shutil2
+    _shutil2.rmtree(_SESSION_TMP_DIR, ignore_errors=True)
 
     try:
         bpy.ops.wm.quit_blender()

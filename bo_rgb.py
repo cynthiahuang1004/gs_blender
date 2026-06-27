@@ -2,17 +2,19 @@
 bo_rgb.py
 =========
 Bayesian optimization to calibrate RGB rendering parameters against
-a reference real image (real_data/rgb_images/47.jpg).
+all real RGB images in real_data/rgb_images/ (mean loss across all targets).
 
 Pipeline
 --------
 1. Load 47.jpg as target (128x128)
 2. For each BO trial:
    a. Write params JSON to temp file
-   b. Call Blender with gs_rgb_render.py (fixed scene: session_000/sensor_0000/0000_pose.json)
-   c. Apply post-FX in Python (barrel distortion + radial blur + vignette)
-   d. loss = 0.3 * MSE + 0.7 * per-channel Bhattacharyya histogram distance
-3. forest_minimize over 14-D parameter space
+   b. Call Blender with gs_rgb_render.py (fixed scene)
+   c. Apply post-FX in Python:
+      barrel distortion + radial blur + vignette +
+      radial warm tint + haze (gel optics simulation)
+   d. loss = 0.2*MSE + 0.5*Bhattacharyya + 0.3*(1-SSIM)
+3. forest_minimize over 22-D parameter space
 4. Save bo_results/best_rgb_params.json + best_rgb_render.png + rgb_convergence.png
 
 Usage
@@ -36,8 +38,7 @@ except ImportError:
 
 # ── Paths ──────────────────────────────────────────────────────
 SCRIPT_DIR    = os.path.dirname(os.path.abspath(__file__))
-BLENDER_PATH  = r'C:\Program Files\Blender Foundation\Blender 4.5\blender.exe'
-TARGET_IMAGE  = os.path.join(SCRIPT_DIR, 'real_data', 'rgb_images', '47.jpg')
+BLENDER_PATH  = '/home/shared/blender-4.2.0-linux-x64/blender'
 RESULTS_DIR   = os.path.join(SCRIPT_DIR, 'bo_results')
 RENDER_SCRIPT = os.path.join(SCRIPT_DIR, 'gs_rgb_render.py')
 BLEND_FILE    = os.path.join(SCRIPT_DIR, 'gelsight_sampler.blend')
@@ -46,18 +47,28 @@ os.makedirs(RESULTS_DIR, exist_ok=True)
 TARGET_SIZE = (128, 128)
 LOSS_THRESHOLD = 0.05
 
-# ── Load target ────────────────────────────────────────────────
-def _load_target():
-    img = cv2.imread(TARGET_IMAGE)
-    if img is None:
-        raise RuntimeError(f'Cannot load target image: {TARGET_IMAGE}')
-    img = cv2.resize(img, TARGET_SIZE).astype(np.float32) / 255.0
-    cv2.imwrite(os.path.join(RESULTS_DIR, 'rgb_target.png'),
-                (img * 255).astype(np.uint8))
-    print(f'Target: {TARGET_IMAGE}  →  {RESULTS_DIR}/rgb_target.png')
-    return img
+# ── Load targets (all real RGB images) ─────────────────────────
+def _load_targets():
+    targets = []
+    img_dir = os.path.join(SCRIPT_DIR, 'real_data', 'rgb_images')
+    fnames = sorted(f for f in os.listdir(img_dir)
+                    if f.lower().endswith(('.jpg', '.jpeg', '.png')))
+    for fname in fnames:
+        img = cv2.imread(os.path.join(img_dir, fname))
+        if img is None:
+            continue
+        img = cv2.resize(img, TARGET_SIZE).astype(np.float32) / 255.0
+        targets.append(img)
+    if not targets:
+        raise RuntimeError(f'No images found in {img_dir}')
+    mean_img = np.mean(targets, axis=0)
+    cv2.imwrite(os.path.join(RESULTS_DIR, 'rgb_target_mean.png'),
+                (mean_img * 255).astype(np.uint8))
+    print(f'Targets: {len(targets)} images from real_data/rgb_images/')
+    print(f'  Mean target → {RESULTS_DIR}/rgb_target_mean.png')
+    return targets
 
-TARGET = _load_target()
+TARGETS = _load_targets()
 
 # ── Post-FX (applied in Python, not in Blender) ───────────────
 
@@ -88,21 +99,81 @@ def _gblur(rgb, sigma):
         out[:, :, c] = np.apply_along_axis(lambda r: np.convolve(r, k, mode='same'), 0, h)
     return np.clip(out, 0, 1)
 
+def _boost_sat(rgb, factor, dist):
+    """Boost saturation in center, fade toward edges. rgb: float32 BGR [0,1]."""
+    if abs(factor - 1.0) < 0.01:
+        return rgb
+    gray = 0.114 * rgb[:,:,0] + 0.587 * rgb[:,:,1] + 0.299 * rgb[:,:,2]
+    gray = gray[:,:,None]
+    center_w = np.clip(1.0 - dist, 0, 1)[:,:,None] ** 2
+    local_fac = 1.0 + (factor - 1.0) * center_w
+    return np.clip(gray + (rgb - gray) * local_fac, 0, 1)
+
 def _apply_fx(img_uint8, p):
-    """Apply barrel + radial blur + vignette. Returns float32 [0,1]."""
+    """Apply barrel + radial blur + vignette + asymmetric warm tint + haze + sat boost."""
     rgb = img_uint8.astype(np.float32) / 255.
     H, W = rgb.shape[:2]
     rgb = _barrel(rgb, float(p.get('barrel_k1', 0.07)))
     blurred = _gblur(rgb, float(p.get('blur_sigma', 1.25)))
     cy, cx = H / 2., W / 2.
     yy, xx = np.mgrid[0:H, 0:W]
-    dist = np.sqrt(((yy - cy) / cy) ** 2 + ((xx - cx) / cx) ** 2)
-    w = np.clip(dist ** 1.5, 0, 1)[:, :, None]   # blur_falloff fixed at 1.5
+
+    # Asymmetric tint center: tint_cx/cy shift the "clear" center
+    tcx = cx + float(p.get('tint_cx', 0.0)) * cx
+    tcy = cy + float(p.get('tint_cy', 0.0)) * cy
+    dist = np.sqrt(((yy - tcy) / cy) ** 2 + ((xx - tcx) / cx) ** 2)
+
+    w = np.clip(dist ** 1.5, 0, 1)[:, :, None]
     rgb = rgb * (1 - w) + blurred * w
+
+    # Radial warm tint: blend toward a warm color at edges (simulates gel optics)
+    tint_color = np.array([[[
+        float(p.get('tint_b', 0.15)),   # BGR order for cv2
+        float(p.get('tint_g', 0.55)),
+        float(p.get('tint_r', 0.95)),
+    ]]], dtype=np.float32)
+    tint_str = float(p.get('tint_strength', 0.4))
+    tint_w = np.clip(dist ** 2 * tint_str, 0, 1)[:, :, None]
+    rgb = rgb * (1 - tint_w) + tint_color * tint_w
+
+    # Haze layer: semi-transparent warm fog over edges
+    haze_opacity = float(p.get('haze_opacity', 0.2))
+    haze_w = np.clip(dist ** 1.5 * haze_opacity, 0, 1)[:, :, None]
+    rgb = rgb * (1 - haze_w) + tint_color * 0.7 * haze_w
+
+    # Center saturation boost
+    sat_boost = float(p.get('sat_boost', 1.4))
+    rgb = _boost_sat(rgb, sat_boost, dist)
+
+    # Vignette (brightness falloff)
     mask = np.clip(1. - dist ** 2 * float(p.get('vignette', 0.25)), 0, 1)[:, :, None]
     return np.clip(rgb * mask, 0, 1)
 
 # ── Loss ───────────────────────────────────────────────────────
+
+def _ssim(img1, img2):
+    """Mean SSIM over 3 channels. Inputs: float32 [0,1] same shape."""
+    C1, C2 = 0.01 ** 2, 0.03 ** 2
+    k = 7
+    s = 1.5
+    sz = max(3, k | 1)
+    x = np.arange(sz) - sz // 2
+    g = np.exp(-x ** 2 / (2 * s ** 2));  g /= g.sum()
+    def _conv2d(arr):
+        out = np.empty_like(arr)
+        for c in range(arr.shape[2]):
+            h = np.apply_along_axis(lambda r: np.convolve(r, g, mode='same'), 1, arr[:, :, c])
+            out[:, :, c] = np.apply_along_axis(lambda r: np.convolve(r, g, mode='same'), 0, h)
+        return out
+    mu1 = _conv2d(img1);  mu2 = _conv2d(img2)
+    mu1_sq = mu1 ** 2;  mu2_sq = mu2 ** 2;  mu12 = mu1 * mu2
+    s1_sq = _conv2d(img1 ** 2) - mu1_sq
+    s2_sq = _conv2d(img2 ** 2) - mu2_sq
+    s12   = _conv2d(img1 * img2) - mu12
+    num   = (2 * mu12 + C1) * (2 * s12 + C2)
+    den   = (mu1_sq + mu2_sq + C1) * (s1_sq + s2_sq + C2)
+    return float(np.mean(num / den))
+
 
 def _image_loss(rendered, target):
     """Both inputs: float32 BGR [0,1] at TARGET_SIZE."""
@@ -113,18 +184,19 @@ def _image_loss(rendered, target):
         h_t = cv2.calcHist([target],   [c], None, [64], [0., 1.])
         cv2.normalize(h_r, h_r);  cv2.normalize(h_t, h_t)
         hist_d += cv2.compareHist(h_r, h_t, cv2.HISTCMP_BHATTACHARYYA)
-    return 0.3 * mse + 0.7 * (hist_d / 3.0)
+    ssim_val = _ssim(rendered, target)
+    return 0.2 * mse + 0.5 * (hist_d / 3.0) + 0.3 * (1.0 - ssim_val)
 
-# ── Parameter space (14-D) ─────────────────────────────────────
+# ── Parameter space (22-D) ─────────────────────────────────────
 PARAM_SPACE = [
     # World / ambient lighting
     Real(0.5,   4.0,  name='world_strength'),
     # Camera depth of field
     Real(0.8,   3.0,  name='dof_fstop'),
     # Object material (blue plastic)
-    Real(0.0,   0.2,  name='obj_r'),
-    Real(0.05,  0.4,  name='obj_g'),
-    Real(0.4,   1.0,  name='obj_b'),
+    Real(0.05,  0.55, name='obj_r'),
+    Real(0.15,  0.65, name='obj_g'),
+    Real(0.3,   1.0,  name='obj_b'),
     Real(0.1,   0.8,  name='obj_roughness'),
     # Platform material (metal)
     Real(0.0,   0.4,  name='plat_r'),
@@ -132,19 +204,36 @@ PARAM_SPACE = [
     Real(0.1,   0.6,  name='plat_b'),
     Real(0.1,   0.6,  name='plat_roughness'),
     Real(0.4,   1.0,  name='plat_metallic'),
-    # Post-FX
+    # Post-FX: barrel + blur
     Real(0.0,   0.15, name='barrel_k1'),
     Real(0.5,   2.5,  name='blur_sigma'),
     Real(0.0,   0.5,  name='vignette'),
+    # Radial warm tint (gel edge color)
+    Real(0.6,   1.0,  name='tint_r'),
+    Real(0.3,   0.8,  name='tint_g'),
+    Real(0.0,   0.4,  name='tint_b'),
+    Real(0.1,   0.8,  name='tint_strength'),
+    # Asymmetric tint center offset (-0.5..+0.5 of half-width)
+    Real(-0.5,  0.5,  name='tint_cx'),
+    Real(-0.5,  0.5,  name='tint_cy'),
+    # Center saturation boost
+    Real(1.0,   2.5,  name='sat_boost'),
+    # Haze (gel fog)
+    Real(0.0,   0.6,  name='haze_opacity'),
 ]
 
-# Warm-start: current hardcoded values from render_rgb_batch.py
+# Warm-start from v4 best
 X0_MANUAL = [
-    2.0,                                        # world_strength
-    1.2,                                        # dof_fstop
-    0.03, 0.18, 0.75, 0.35,                    # object (blue plastic)
-    26/255, 115/255, 106/255, 0.25, 0.85,      # platform (teal metal)
-    0.07, 1.25, 0.25,                           # post-FX
+    2.370,                                      # world_strength
+    0.865,                                      # dof_fstop
+    0.165, 0.249, 0.386,                        # obj RGB
+    0.364,                                      # obj_roughness
+    0.226, 0.296, 0.468, 0.524, 0.582,         # platform
+    0.048, 1.607, 0.006,                        # barrel, blur, vignette
+    0.837, 0.734, 0.317, 0.311,                # tint
+    -0.394, 0.129,                              # tint center offset
+    1.806,                                      # sat_boost
+    0.047,                                      # haze_opacity
 ]
 
 # ── Temp paths ─────────────────────────────────────────────────
@@ -206,7 +295,7 @@ def objective(**params):
 
     img_fx  = _apply_fx(img_raw, clean)
     img_fx  = cv2.resize(img_fx.astype(np.float32), TARGET_SIZE)
-    loss    = _image_loss(img_fx, TARGET)
+    loss    = float(np.mean([_image_loss(img_fx, t) for t in TARGETS]))
     _history.append((idx, loss))
 
     is_best = loss < _best_loss[0]
@@ -234,9 +323,9 @@ def _early_stop(result):
 def main():
     print('=' * 65)
     print('GelSight RGB Bayesian Optimization')
-    print(f'  Target  : {os.path.basename(TARGET_IMAGE)}  ({TARGET_SIZE[0]}x{TARGET_SIZE[1]})')
+    print(f'  Targets : {len(TARGETS)} real images  ({TARGET_SIZE[0]}x{TARGET_SIZE[1]})')
     print(f'  Params  : {len(PARAM_SPACE)} dimensions')
-    print(f'  Loss    : 0.3*MSE + 0.7*histogram  (threshold={LOSS_THRESHOLD})')
+    print(f'  Loss    : 0.2*MSE + 0.5*histogram + 0.3*(1-SSIM)  (threshold={LOSS_THRESHOLD})')
     print(f'  Blender : {BLENDER_PATH}')
     print(f'  Results : {RESULTS_DIR}')
     print('=' * 65)
@@ -246,7 +335,7 @@ def main():
         PARAM_SPACE,
         x0=[X0_MANUAL],
         n_calls=500,
-        n_initial_points=20,
+        n_initial_points=50,
         acq_func='EI',
         random_state=42,
         verbose=False,
