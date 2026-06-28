@@ -30,7 +30,7 @@ from pathlib import Path
 from concurrent.futures import ProcessPoolExecutor, as_completed
 
 SCRIPT_DIR   = Path(__file__).parent
-BLENDER      = Path(r'C:\Program Files\Blender Foundation\Blender 4.5\blender.exe')
+BLENDER      = Path('/home/shared/blender-4.2.0-linux-x64/blender')
 BLEND_FILE   = SCRIPT_DIR / 'gelsight_sampler.blend'
 SCRIPTING    = SCRIPT_DIR / 'scripting.py'
 RENDERS_ROOT = SCRIPT_DIR / 'renders'
@@ -139,10 +139,12 @@ def main():
                         help='Comma-separated GPU IDs (e.g. 0,1,2,3)')
     parser.add_argument('--reverse', action='store_true',
                         help='Process objects in reverse alphabetical order')
+    parser.add_argument('--workers', type=int, default=0,
+                        help='Number of parallel workers (default: one per GPU)')
     args = parser.parse_args()
 
     gpu_ids = [int(g) for g in args.gpus.split(',')]
-    n_workers = len(gpu_ids)
+    n_workers = args.workers if args.workers > 0 else len(gpu_ids)
 
     sessions = collect_sessions(obj_filter=set(args.obj) if args.obj else None,
                                 exclude=set(args.exclude) if args.exclude else None,
@@ -162,7 +164,7 @@ def main():
 
     if args.dry_run:
         for i, s in enumerate(todo):
-            gpu_id = gpu_ids[i % n_workers]
+            gpu_id = gpu_ids[i % len(gpu_ids)]
             print(f'  [{i+1:3d}/{n_todo}] GPU{gpu_id} {s.parent.name}/{s.name}  (dry-run)')
         return
 
@@ -171,7 +173,7 @@ def main():
 
     work_items = []
     for i, session_dir in enumerate(todo):
-        gpu_id = gpu_ids[i % n_workers]
+        gpu_id = gpu_ids[i % len(gpu_ids)]
         work_items.append((session_dir, gpu_id, i + 1, n_todo))
 
     with ProcessPoolExecutor(max_workers=n_workers) as executor:

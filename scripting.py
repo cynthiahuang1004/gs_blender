@@ -1296,6 +1296,23 @@ if __name__ == '__main__':
 
         overall_idx_formatted = '{0:04}'.format(overall_idx)
 
+        # Resume support: skip samples that already have all output files
+        _skip = True
+        for _si, _sn in enumerate(sensors):
+            _sd = os.path.join(render_dir, f'sensor_{_si:04d}')
+            if not all(os.path.exists(p) for p in [
+                os.path.join(_sd, 'samples', f'{overall_idx_formatted}.png'),
+                os.path.join(_sd, 'raw_data', f'{overall_idx_formatted}_pose.json'),
+                os.path.join(_sd, 'raw_data', f'{overall_idx_formatted}.npy'),
+                os.path.join(_sd, 'raw_data', f'{overall_idx_formatted}_gt.npy'),
+                os.path.join(_sd, 'rgb', f'{overall_idx_formatted}.png'),
+            ]):
+                _skip = False
+                break
+        if _skip:
+            overall_idx += 1
+            continue
+
         for sensor_idx, sensor in enumerate(sensors):
             sensor_idx_formatted = '{0:04}'.format(sensor_idx)
             sensor_dir = os.path.join(render_dir, f'sensor_{sensor_idx_formatted}')
