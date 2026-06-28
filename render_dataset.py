@@ -56,11 +56,19 @@ def is_complete(session_dir: Path) -> bool:
     n = _n_expected(session_dir)
     if n == 0:
         return False
-    samples = session_dir / 'sensor_0000' / 'samples'
-    if not samples.exists():
-        return False
-    done = sum(1 for p in samples.iterdir() if p.suffix == '.png')
-    return done >= n
+    sensor = session_dir / 'sensor_0000'
+    for i in range(n):
+        idx = f'{i:04d}'
+        files = [
+            sensor / 'samples' / f'{idx}.png',
+            sensor / 'rgb' / f'{idx}.png',
+            sensor / 'raw_data' / f'{idx}.npy',
+            sensor / 'raw_data' / f'{idx}_gt.npy',
+            sensor / 'raw_data' / f'{idx}_pose.json',
+        ]
+        if not all(f.exists() and f.stat().st_size > 0 for f in files):
+            return False
+    return True
 
 
 def run_session(session_dir: Path, gpu_id: int = 0) -> bool:

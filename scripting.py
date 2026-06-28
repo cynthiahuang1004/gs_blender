@@ -1015,6 +1015,13 @@ if __name__ == '__main__':
     # ─────────────────────────────────────────────────────────────────────────
 
     sensors = []
+    # Check if there are existing rendered samples to resume from
+    _has_existing = False
+    if not CONTINUE and os.path.exists(render_dir):
+        _s0 = os.path.join(render_dir, 'sensor_0000', 'samples')
+        if os.path.exists(_s0) and len(os.listdir(_s0)) > 0:
+            _has_existing = True
+
     if not CONTINUE:
         session_backup = None
         _session_path = os.path.join(render_dir, 'session.json')
@@ -1025,7 +1032,17 @@ if __name__ == '__main__':
         if os.path.exists(render_dir):
             for d in os.listdir(render_dir):
                 if 'sensor' in d:
-                    shutil.rmtree(os.path.join(render_dir, d), ignore_errors=True)
+                    # Keep samples/rgb/raw_data if resuming, only redo calibration
+                    sensor_path = os.path.join(render_dir, d)
+                    if _has_existing:
+                        cal = os.path.join(sensor_path, 'calibration')
+                        if os.path.exists(cal):
+                            shutil.rmtree(cal, ignore_errors=True)
+                        par = os.path.join(sensor_path, 'parameters.txt')
+                        if os.path.exists(par):
+                            os.remove(par)
+                    else:
+                        shutil.rmtree(sensor_path, ignore_errors=True)
         else:
             os.mkdir(render_dir)
 
@@ -1036,15 +1053,14 @@ if __name__ == '__main__':
         for idx in range(NUM_SENSORS):
             idx_formatted = '{0:04}'.format(idx)
             sensor_dir = os.path.join(render_dir, f'sensor_{idx_formatted}')
-            os.mkdir(sensor_dir)
-            os.mkdir(os.path.join(sensor_dir, 'calibration'))
-            os.mkdir(os.path.join(sensor_dir, 'samples'))
-            os.mkdir(os.path.join(sensor_dir, 'raw_data'))
-            os.mkdir(os.path.join(sensor_dir, 'rgb'))
+            os.makedirs(os.path.join(sensor_dir, 'calibration'), exist_ok=True)
+            os.makedirs(os.path.join(sensor_dir, 'samples'), exist_ok=True)
+            os.makedirs(os.path.join(sensor_dir, 'raw_data'), exist_ok=True)
+            os.makedirs(os.path.join(sensor_dir, 'rgb'), exist_ok=True)
             sensor_txt_dir = os.path.join(sensor_dir, 'parameters.txt')
             sensors.append(create_sensor(write_dir=sensor_txt_dir))
 
-    else:
+    else:  # CONTINUE or _has_existing
         if os.path.exists(render_dir):
             sensor_dirs = [d for d in os.listdir(render_dir) if 'sensor' in d]
             sensor_dirs.sort()
