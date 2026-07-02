@@ -62,6 +62,7 @@ def is_complete(session_dir: Path) -> bool:
         files = [
             sensor / 'samples' / f'{idx}.png',
             sensor / 'rgb' / f'{idx}.png',
+            sensor / 'rgb_contact' / f'{idx}.png',
             sensor / 'raw_data' / f'{idx}.npy',
             sensor / 'raw_data' / f'{idx}_gt.npy',
             sensor / 'raw_data' / f'{idx}_pose.json',

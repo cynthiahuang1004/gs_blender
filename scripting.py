@@ -218,14 +218,14 @@ def _setup_platform():
     _platform_objs_global = new_objs
     print(f'Platform ready: {[o.name for o in new_objs]}')
 
-def render_rgb_sample(obj_name, fov_deg, out_path):
+def render_rgb_sample(obj_name, fov_deg, out_path, cam_z=None):
     cam = bpy.data.objects['Camera']
     cam_data = cam.data
     orig_cam_z = cam.location[2]
     orig_fov   = cam_data.angle
     orig_dof   = cam_data.dof.use_dof
 
-    cam.location[2]         = RGB_CAM_Z
+    cam.location[2]         = cam_z if cam_z is not None else RGB_CAM_Z
     cam_data.angle          = math.radians(fov_deg)
     cam_data.dof.use_dof    = False
 
@@ -447,7 +447,7 @@ class create_sensor():
         self.light_type = light_type
         self.angle = angle
         self.emittors = [[top_str, top_col], [bot_str, bot_col], [lef_str, lef_col], [rig_str, rig_col]]
-        self.fov = fov
+        self.fov = 40.0  # fixed FOV
         self.roughness = roughness
         self.length = length
         self.lg_str   = None   # RGreenEmittor  (image: 右)
@@ -472,7 +472,7 @@ class create_sensor():
             self.emittors[2][1] = (float(content[13]), float(content[14]), float(content[15]), 1)
             self.emittors[3][0] = float(content[16])
             self.emittors[3][1] = (float(content[17]), float(content[18]), float(content[19]), 1)
-            self.fov = float(content[20])
+            self.fov = 40.0  # fixed FOV, ignore saved value
             self.roughness = float(content[21])
             self.length = float(content[22])
         else:
@@ -510,7 +510,7 @@ class create_sensor():
         self.smoothness    = random.randrange(30, 45)
         self.scale         = 0.4918   # matches scripting_bo.py hardcoded value
         self.light_rot_z   = -math.pi # matches scripting_bo.py rot_z=-3.14159
-        self.fov           = ru(30.0, 50.0)
+        self.fov           = 40.0
         self.roughness     = ru(ROUGH_MIN, ROUGH_MAX)
         self.gel_roughness = float(p.get('gel_roughness', 0.45))
         self.gel_fac       = float(p.get('gel_fac', 0.25))
@@ -550,7 +550,7 @@ class create_sensor():
     def randomize(self):
         self.smoothness = random.randrange(SMOOTHNESS_MIN, SMOOTHNESS_MAX)
         self.scale = ru(SCALE_MIN, SCALE_MAX)
-        self.fov = ru(FOV_MIN, FOV_MAX)
+        self.fov = 40.0
         self.roughness = ru(ROUGH_MIN, ROUGH_MAX)
         if self.length is None:
             self.length = ru(LENGTH_MIN, LENGTH_MAX)
@@ -597,7 +597,7 @@ class create_sensor():
 
         self.smoothness = random.randrange(SMOOTHNESS_MIN, SMOOTHNESS_MAX)
         self.scale = ru(SCALE_MIN, SCALE_MAX)
-        self.fov = ru(FOV_MIN, FOV_MAX)
+        self.fov = 40.0
         self.roughness = ru(ROUGH_MIN, ROUGH_MAX)
         self.gel_roughness = ru(GEL_ROUGHNESS_MIN, GEL_ROUGHNESS_MAX)
         self.gel_fac = ru(GEL_FAC_MIN, GEL_FAC_MAX)
@@ -935,7 +935,94 @@ sys.path.append(dir)
 render_dir = os.environ.get('GELSIGHT_RENDER_DIR', os.path.join(dir, 'renders'))
 
 # ── RGB render parameters ──────────────────────────────────────
-RGB_CAM_Z       = -0.085
+RGB_CAM_Z         = -0.085
+RGB_CAM_Z_CONTACT = -0.01
+
+# ── Multicolor material ───────────────────────────────────────
+QUAD_BASE_COLOR = (0.45, 0.45, 0.45, 1.0)
+QUAD_COLORS = [
+    (0.72, 0.66, 0.28, 1.0),
+    (0.30, 0.40, 0.66, 1.0),
+    (0.62, 0.26, 0.26, 1.0),
+    (0.10, 0.10, 0.10, 1.0),
+]
+
+def _create_multicolor_material(name, seed, cross_center=(0, 0, 0), obj_rotation=(0, 0, 0), split_axes=(0, 1), height_thresh=0.0):
+    import random as _rnd
+    mat = bpy.data.materials.new(name=name)
+    mat.use_nodes = True
+    nt = mat.node_tree
+    nodes = nt.nodes
+    links = nt.links
+    bsdf_node = nodes.get('Principled BSDF')
+    bsdf_node.inputs['Roughness'].default_value = _rgb_bo.get('obj_roughness', 0.35)
+    bsdf_node.inputs['Specular IOR Level'].default_value = 0.5
+    bsdf_node.inputs['Metallic'].default_value = 0.0
+    geom = nodes.new('ShaderNodeNewGeometry')
+    geom.location = (-1200, 0)
+    # Subtract cross center
+    sub_cc = nodes.new('ShaderNodeVectorMath')
+    sub_cc.operation = 'SUBTRACT'
+    sub_cc.location = (-1000, 0)
+    sub_cc.inputs[1].default_value = cross_center
+    links.new(geom.outputs['Position'], sub_cc.inputs[0])
+    # Inverse-rotate to object frame (colors follow object rotation)
+    inv_rot = nodes.new('ShaderNodeVectorRotate')
+    inv_rot.rotation_type = 'EULER_XYZ'
+    inv_rot.invert = True
+    inv_rot.location = (-800, 0)
+    inv_rot.inputs['Rotation'].default_value = obj_rotation
+    links.new(sub_cc.outputs['Vector'], inv_rot.inputs['Vector'])
+    sep_obj = nodes.new('ShaderNodeSeparateXYZ')
+    sep_obj.location = (-600, 0)
+    links.new(inv_rot.outputs['Vector'], sep_obj.inputs['Vector'])
+    # World-space Z for height split
+    sep_pos = nodes.new('ShaderNodeSeparateXYZ')
+    sep_pos.location = (-600, -200)
+    links.new(geom.outputs['Position'], sep_pos.inputs['Vector'])
+    # Quadrant split on base plane axes (skip protrusion axis)
+    axis_names = ['X', 'Y', 'Z']
+    gtx = nodes.new('ShaderNodeMath')
+    gtx.operation = 'GREATER_THAN'
+    gtx.location = (-400, 150)
+    gtx.inputs[1].default_value = 0.0
+    links.new(sep_obj.outputs[axis_names[split_axes[0]]], gtx.inputs[0])
+    gty = nodes.new('ShaderNodeMath')
+    gty.operation = 'GREATER_THAN'
+    gty.location = (-400, -50)
+    gty.inputs[1].default_value = 0.0
+    links.new(sep_obj.outputs[axis_names[split_axes[1]]], gty.inputs[0])
+    rng = _rnd.Random(seed)
+    colors = list(QUAD_COLORS)
+    rng.shuffle(colors)
+    tl, tr, bl, br = colors
+    def _mix(fac_out, col_a, col_b, x=0, y=0):
+        m = nodes.new('ShaderNodeMix')
+        m.data_type = 'RGBA'
+        m.location = (x, y)
+        links.new(fac_out, m.inputs[0])
+        if hasattr(col_a, 'node'):
+            links.new(col_a, m.inputs[6])
+        else:
+            m.inputs[6].default_value = col_a
+        if hasattr(col_b, 'node'):
+            links.new(col_b, m.inputs[7])
+        else:
+            m.inputs[7].default_value = col_b
+        return m
+    top_mix = _mix(gtx.outputs['Value'], tl, tr, x=-300, y=150)
+    bot_mix = _mix(gtx.outputs['Value'], bl, br, x=-300, y=-50)
+    quad_mix = _mix(gty.outputs['Value'],
+                    bot_mix.outputs[2], top_mix.outputs[2], x=-100, y=50)
+    hcmp = nodes.new('ShaderNodeMath')
+    hcmp.operation = 'GREATER_THAN'
+    hcmp.location = (-300, 300)
+    hcmp.inputs[1].default_value = height_thresh
+    links.new(sep_pos.outputs['Z'], hcmp.inputs[0])
+    final = _mix(hcmp.outputs['Value'],
+                 quad_mix.outputs[2], QUAD_BASE_COLOR, x=100, y=100)
+    links.new(final.outputs[2], bsdf_node.inputs['Base Color'])
+    return mat
 RGB_DOF_FOCUS   = 0.085
 RGB_DOF_FSTOP   = _rgb_bo.get('dof_fstop',      1.2)
 RGB_WORLD_STR   = _rgb_bo.get('world_strength',  2.0)
@@ -1057,6 +1144,7 @@ if __name__ == '__main__':
             os.makedirs(os.path.join(sensor_dir, 'samples'), exist_ok=True)
             os.makedirs(os.path.join(sensor_dir, 'raw_data'), exist_ok=True)
             os.makedirs(os.path.join(sensor_dir, 'rgb'), exist_ok=True)
+            os.makedirs(os.path.join(sensor_dir, 'rgb_contact'), exist_ok=True)
             sensor_txt_dir = os.path.join(sensor_dir, 'parameters.txt')
             sensors.append(create_sensor(write_dir=sensor_txt_dir))
 
@@ -1073,6 +1161,7 @@ if __name__ == '__main__':
                     os.makedirs(os.path.join(sensor_dir, 'samples'), exist_ok=True)
                     os.makedirs(os.path.join(sensor_dir, 'raw_data'), exist_ok=True)
                     os.makedirs(os.path.join(sensor_dir, 'rgb'), exist_ok=True)
+                    os.makedirs(os.path.join(sensor_dir, 'rgb_contact'), exist_ok=True)
                     sensor_txt_dir = os.path.join(sensor_dir, 'parameters.txt')
                     sensors.append(create_sensor(write_dir=sensor_txt_dir))
             else:
@@ -1084,6 +1173,7 @@ if __name__ == '__main__':
                     os.makedirs(os.path.join(full_sensor_dir, 'samples'), exist_ok=True)
                     os.makedirs(os.path.join(full_sensor_dir, 'raw_data'), exist_ok=True)
                     os.makedirs(os.path.join(full_sensor_dir, 'rgb'), exist_ok=True)
+                    os.makedirs(os.path.join(full_sensor_dir, 'rgb_contact'), exist_ok=True)
         else:
             os.mkdir(render_dir)
             for idx in range(NUM_SENSORS):
@@ -1094,6 +1184,7 @@ if __name__ == '__main__':
                 os.mkdir(os.path.join(sensor_dir, 'samples'))
                 os.mkdir(os.path.join(sensor_dir, 'raw_data'))
                 os.mkdir(os.path.join(sensor_dir, 'rgb'))
+                os.mkdir(os.path.join(sensor_dir, 'rgb_contact'))
                 sensor_txt_dir = os.path.join(sensor_dir, 'parameters.txt')
                 sensors.append(create_sensor(write_dir=sensor_txt_dir))
 
@@ -1162,21 +1253,29 @@ if __name__ == '__main__':
         obj_name_map[stem] = imported_name
         bpy.data.objects[imported_name].hide_render = True
 
-        # Assign blue plastic material for RGB renders
-        mat = bpy.data.materials.new(name=f'plastic_blue_{imported_name}')
-        mat.use_nodes = True
-        bsdf = mat.node_tree.nodes.get('Principled BSDF')
-        if bsdf:
-            bsdf.inputs['Base Color'].default_value = (
-                _rgb_bo.get('obj_r', 0.03),
-                _rgb_bo.get('obj_g', 0.18),
-                _rgb_bo.get('obj_b', 0.75), 1.0)
-            bsdf.inputs['Roughness'].default_value = _rgb_bo.get('obj_roughness', 0.35)
-            bsdf.inputs['Specular IOR Level'].default_value = 0.5
-            bsdf.inputs['Metallic'].default_value = 0.0
+        # Compute split axes from mesh bounding box (base plane = 2 largest dims)
+        _obj_tmp = bpy.data.objects[imported_name]
+        _dims = list(_obj_tmp.dimensions)
+        _protrusion = _dims.index(min(_dims))
+        _split_axes = tuple(i for i in range(3) if i != _protrusion)
+
+        # Assign multicolor material (deterministic seed from obj file name)
+        _multicolor_seed = sum(ord(c) * (i + 1) for i, c in enumerate(obj_file)) % 100000
+        _multicolor_mat = _create_multicolor_material(
+            f'multicolor_{imported_name}', seed=_multicolor_seed,
+            split_axes=_split_axes)
+
+        # Store per-object data for later use in sample loop
+        if not hasattr(bpy, '_mc_data'):
+            bpy._mc_data = {}
+        bpy._mc_data[imported_name] = {
+            'seed': _multicolor_seed,
+            'split_axes': _split_axes,
+            'mat': _multicolor_mat,
+        }
         obj_blender = bpy.data.objects[imported_name]
         obj_blender.data.materials.clear()
-        obj_blender.data.materials.append(mat)
+        obj_blender.data.materials.append(_multicolor_mat)
 
     # remove incomplete render batch
     if CONTINUE:
@@ -1232,6 +1331,18 @@ if __name__ == '__main__':
         print(f'  rotation_step={rotation_step:.3f}')
         print(f'  scale={fixed_scale:.4f}')
         print(f'  samples={NUM_OBJ_SAMPLES}, X=[{X_MIN},{X_MAX}], Y=[{Y_MIN},{Y_MAX}]')
+
+        # Compute BB center for pose normalization (object center = 0,0)
+        from mathutils import Vector as _Vec
+        _obj_bl = bpy.data.objects[obj]
+        _obj_bl.scale = (1 / fixed_scale, 1 / fixed_scale, 1 / fixed_scale)
+        _obj_bl.rotation_euler = fixed_rotation
+        _obj_bl.location = (0, 0, 0)
+        bpy.context.view_layer.update()
+        _bbox = [_obj_bl.matrix_world @ _Vec(c) for c in _obj_bl.bound_box]
+        _bb_center_x = (min(v.x for v in _bbox) + max(v.x for v in _bbox)) / 2
+        _bb_center_y = (min(v.y for v in _bbox) + max(v.y for v in _bbox)) / 2
+        print(f'  pose_center=({_bb_center_x*1000:.1f}, {_bb_center_y*1000:.1f})mm')
     else:
         fixed_rotation = (ru(0, 2 * pi), ru(0, 2 * pi), ru(0, 2 * pi))
         rotation_step  = 0.15
@@ -1322,6 +1433,7 @@ if __name__ == '__main__':
                 os.path.join(_sd, 'raw_data', f'{overall_idx_formatted}.npy'),
                 os.path.join(_sd, 'raw_data', f'{overall_idx_formatted}_gt.npy'),
                 os.path.join(_sd, 'rgb', f'{overall_idx_formatted}.png'),
+                os.path.join(_sd, 'rgb_contact', f'{overall_idx_formatted}.png'),
             ]):
                 _skip = False
                 break
@@ -1346,8 +1458,8 @@ if __name__ == '__main__':
 
             pose = {
                 'obj_name': obj,
-                'sample_x': x,
-                'sample_y': y,
+                'sample_x': -(x - _bb_center_x),
+                'sample_y': y - _bb_center_y,
                 'sample_z': z,
                 'location': list(obj_data.location),
                 'rotation_euler': list(obj_data.rotation_euler),
@@ -1366,11 +1478,40 @@ if __name__ == '__main__':
             get_depth(os.path.join(sensor_dir, 'raw_data', f'{overall_idx_formatted}.npy'))
             get_gt_depth(os.path.join(sensor_dir, 'raw_data', f'{overall_idx_formatted}_gt.npy'), obj)
 
-            # RGB render with platform background + gel FX
+            # Create per-sample material with correct cross center
+            from mathutils import Vector as _Vec
+            _obj_render = bpy.data.objects[obj]
+            _bbox = [_obj_render.matrix_world @ _Vec(c) for c in _obj_render.bound_box]
+            _bb_ctr = (_Vec((min(v.x for v in _bbox), min(v.y for v in _bbox), min(v.z for v in _bbox))) +
+                       _Vec((max(v.x for v in _bbox), max(v.y for v in _bbox), max(v.z for v in _bbox)))) / 2
+            _mc = bpy._mc_data[obj]
+            _sample_mat = _create_multicolor_material(
+                f'mc_{overall_idx}', seed=_mc['seed'],
+                cross_center=(_bb_ctr.x, _bb_ctr.y, _bb_ctr.z),
+                obj_rotation=tuple(_obj_render.rotation_euler),
+                split_axes=_mc['split_axes'])
+            print(f'    cross=({_bb_ctr.x*1000:.1f},{_bb_ctr.y*1000:.1f})mm rot={[round(r,2) for r in _obj_render.rotation_euler]}')
+            _obj_render.data.materials.clear()
+            _obj_render.data.materials.append(_sample_mat)
+
+            # RGB render (high camera)
             rgb_dir = os.path.join(sensor_dir, 'rgb')
             os.makedirs(rgb_dir, exist_ok=True)
             render_rgb_sample(obj, sensor.fov,
                               os.path.join(rgb_dir, overall_idx_formatted))
+
+            # RGB render (contact camera) at same height as tactile
+            tactile_cam_z = bpy.data.objects['Camera'].location[2]
+            rgb_contact_dir = os.path.join(sensor_dir, 'rgb_contact')
+            os.makedirs(rgb_contact_dir, exist_ok=True)
+            render_rgb_sample(obj, sensor.fov,
+                              os.path.join(rgb_contact_dir, overall_idx_formatted),
+                              cam_z=tactile_cam_z)
+
+            # Restore original material and cleanup
+            _obj_render.data.materials.clear()
+            _obj_render.data.materials.append(_mc['mat'])
+            bpy.data.materials.remove(_sample_mat)
 
         overall_idx += 1
 
