@@ -2,7 +2,7 @@ import os, subprocess, sys
 
 script_dir = os.path.dirname(os.path.abspath(__file__))
 render_dir = os.path.join(script_dir, 'renders')
-BLENDER_PATH = r'C:\Program Files\Blender Foundation\Blender 4.5\blender.exe' 
+BLENDER_PATH = '/home/shared/blender-4.2.0-linux-x64/blender'
 
 session_dirs = sorted([
     d for d in os.listdir(render_dir)

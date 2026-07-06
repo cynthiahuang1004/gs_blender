@@ -4,7 +4,7 @@ CONTINUE = False
 # sampling config
 
 NUM_SENSORS = 1
-NUM_CALIBRATION = 1
+NUM_CALIBRATION = 18
 NUM_OBJ_SAMPLES = 30
 
 OBJ_SIZE_MIN = 0.01
@@ -86,6 +86,7 @@ import random
 import json
 import math
 from mathutils import Euler
+
 
 _PROJ_DIR = os.path.dirname(os.path.abspath(__file__))
 FIXED_PARAMS_PATH = os.environ.get(
@@ -1218,7 +1219,7 @@ if __name__ == '__main__':
         CALIB_Y = [qt, qt, qt, 0, 0, 0, -qt, -qt, -qt]
 
         for obj_idx, calib_obj in enumerate(calibration_objects):
-            for calib_idx in range(NUM_CALIBRATION):
+            for calib_idx in range(len(CALIB_X)):
                 calib_idx_formatted = '{0:04}'.format(overall_calib_idx)
                 calib_out2 = os.path.join(sensor_dir, 'calibration', calib_idx_formatted)
                 bpy.context.scene.render.filepath = calib_out2
