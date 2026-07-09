@@ -163,7 +163,15 @@ def _gel_fx(png_path):
     W, H = img_bpy.size[0], img_bpy.size[1]
     px = np.array(img_bpy.pixels[:], dtype=np.float32).reshape(H, W, 4)
     bpy.data.images.remove(img_bpy)
+
+    # 1. Barrel distortion (primary)
     rgb = _barrel(px[:,:,:3], RGB_BARREL_K1)
+
+    # 2. Refraction distortion (secondary, non-uniform)
+    if abs(RGB_REFRACT_K2) > 1e-4:
+        rgb = _barrel(rgb, RGB_REFRACT_K2)
+
+    # 3. Radial blur (center sharp, edge blurry)
     blurred = _gaussian_blur_ch(rgb, RGB_BLUR_SIGMA)
     cy3, cx3 = H / 2.0, W / 2.0
     yy3, xx3 = np.mgrid[0:H, 0:W]
@@ -172,14 +180,62 @@ def _gel_fx(png_path):
     dist3 = np.sqrt(((yy3-tcy)/cy3)**2 + ((xx3-tcx)/cx3)**2)
     weight = np.clip(dist3 ** RGB_BLUR_FALLOFF, 0, 1)[:,:,None]
     rgb = rgb * (1 - weight) + blurred * weight
+
+    # 4. Tint (radial color shift)
     tint_color = np.array([[[RGB_TINT_R, RGB_TINT_G, RGB_TINT_B]]], dtype=np.float32)
     tint_w = np.clip(dist3 ** 2 * RGB_TINT_STR, 0, 1)[:,:,None]
     rgb = rgb * (1 - tint_w) + tint_color * tint_w
+
+    # 5. Haze
     haze_w = np.clip(dist3 ** 1.5 * RGB_HAZE_OPACITY, 0, 1)[:,:,None]
     rgb = rgb * (1 - haze_w) + tint_color * 0.7 * haze_w
+
+    # 6. Blue shift (uniform color channel shift)
+    if abs(RGB_BLUE_SHIFT) > 1e-4:
+        rgb[:,:,0] = np.clip(rgb[:,:,0] - RGB_BLUE_SHIFT * 0.3, 0, 1)  # reduce red
+        rgb[:,:,1] = np.clip(rgb[:,:,1] - RGB_BLUE_SHIFT * 0.1, 0, 1)  # slightly reduce green
+        rgb[:,:,2] = np.clip(rgb[:,:,2] + RGB_BLUE_SHIFT * 0.2, 0, 1)  # boost blue
+
+    # 7. Contrast boost (around 0.5 midpoint)
+    if abs(RGB_CONTRAST - 1.0) > 1e-4:
+        rgb = np.clip((rgb - 0.5) * RGB_CONTRAST + 0.5, 0, 1)
+
+    # 8. Gamma correction
+    if abs(RGB_GAMMA - 1.0) > 1e-4:
+        rgb = np.clip(np.power(np.maximum(rgb, 0), 1.0 / RGB_GAMMA), 0, 1)
+
+    # 9. Clarity (local contrast via unsharp mask)
+    if abs(RGB_CLARITY) > 1e-4:
+        soft = _gaussian_blur_ch(rgb, 3.0)
+        detail = rgb - soft
+        rgb = np.clip(rgb + detail * RGB_CLARITY, 0, 1)
+
+    # 10. Saturation boost (center-weighted)
     rgb = _boost_sat_center(rgb, RGB_SAT_BOOST, dist3)
+
+    # 11. Specular highlight (simulated gel surface reflection)
+    if RGB_SPEC_STR > 1e-4:
+        spec_dist = np.sqrt(((yy3-cy3)/cy3)**2 + ((xx3-cx3)/cx3)**2)
+        spec = np.exp(-spec_dist**2 / (2 * RGB_SPEC_SIZE**2))
+        rgb = np.clip(rgb + spec[:,:,None] * RGB_SPEC_STR, 0, 1)
+
+    # 12. Edge darkening (object boundary darkening from gel thickness)
+    if abs(RGB_EDGE_DARK) > 1e-4:
+        edge_mask = np.clip(dist3 ** 3 * RGB_EDGE_DARK, 0, 0.5)[:,:,None]
+        rgb = rgb * (1 - edge_mask)
+
+    # 13. Gel thickness gradient (directional brightness non-uniformity)
+    if abs(RGB_GEL_GRAD_STR) > 1e-4:
+        angle_rad = RGB_GEL_GRAD_ANG * np.pi / 180.0
+        grad = ((xx3 - cx3) / cx3 * np.cos(angle_rad) +
+                (yy3 - cy3) / cy3 * np.sin(angle_rad))
+        grad_mask = (1.0 + grad * RGB_GEL_GRAD_STR * 0.3)[:,:,None]
+        rgb = np.clip(rgb * grad_mask, 0, 1)
+
+    # 14. Vignette (edge darkening)
     mask = np.clip(1.0 - dist3**2 * RGB_VIGNETTE, 0, 1)[:,:,None]
     rgb = np.clip(rgb * mask, 0, 1)
+
     out_img = bpy.data.images.new('_gel_tmp', W, H, alpha=False)
     out_px = np.ones((H, W, 4), dtype=np.float32); out_px[:,:,:3] = rgb
     out_img.pixels = out_px.flatten().tolist()
@@ -1039,6 +1095,16 @@ RGB_TINT_CX      = _rgb_bo.get('tint_cx',         0.0)
 RGB_TINT_CY      = _rgb_bo.get('tint_cy',         0.0)
 RGB_SAT_BOOST    = _rgb_bo.get('sat_boost',        1.2)
 RGB_HAZE_OPACITY = _rgb_bo.get('haze_opacity',    0.10)
+RGB_CONTRAST     = _rgb_bo.get('contrast_boost',   1.0)
+RGB_BLUE_SHIFT   = _rgb_bo.get('blue_shift',       0.0)
+RGB_GAMMA        = _rgb_bo.get('gamma',            1.0)
+RGB_CLARITY      = _rgb_bo.get('clarity',          0.0)
+RGB_SPEC_STR     = _rgb_bo.get('specular_strength', 0.0)
+RGB_SPEC_SIZE    = _rgb_bo.get('specular_size',    0.05)
+RGB_REFRACT_K2   = _rgb_bo.get('refraction_k2',   0.0)
+RGB_EDGE_DARK    = _rgb_bo.get('edge_darkening',   0.0)
+RGB_GEL_GRAD_STR = _rgb_bo.get('gel_gradient_strength', 0.0)
+RGB_GEL_GRAD_ANG = _rgb_bo.get('gel_gradient_angle',    0.0)
 RGB_HIDE_NAMES  = ['GelSurface', 'InterfaceSurface', 'EpoxySurface',
                    'LightSurfaceBL', 'LightSurfaceTR',
                    'LightSurfaceTL', 'LightSurfaceBR',

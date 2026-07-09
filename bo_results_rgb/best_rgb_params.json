@@ -20,15 +20,5 @@
   "tint_cx": -0.15,
   "tint_cy": 0.05,
   "sat_boost": 1.2,
-  "haze_opacity": 0.10,
-  "contrast_boost": 1.0,
-  "blue_shift": 0.0,
-  "gamma": 1.0,
-  "clarity": 0.0,
-  "specular_strength": 0.0,
-  "specular_size": 0.05,
-  "refraction_k2": 0.0,
-  "edge_darkening": 0.0,
-  "gel_gradient_strength": 0.0,
-  "gel_gradient_angle": 0.0
+  "haze_opacity": 0.10
 }

@@ -13,6 +13,8 @@ venv/
 renders/
 !renders/**/session.json
 renders_line_angle/
+renders_version2/
+test_multicolor_out/
 old_version/renders_version1
 **/dmaps/
 **/norms/
