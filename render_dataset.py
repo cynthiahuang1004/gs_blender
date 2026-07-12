@@ -30,12 +30,12 @@ from pathlib import Path
 from concurrent.futures import ProcessPoolExecutor, as_completed
 
 SCRIPT_DIR   = Path(__file__).parent
-BLENDER      = Path('/home/shared/blender-4.2.0-linux-x64/blender')
+BLENDER      = Path(r'C:\Program Files\Blender Foundation\Blender 4.5\blender.exe')
 BLEND_FILE   = SCRIPT_DIR / 'gelsight_sampler.blend'
 SCRIPTING    = SCRIPT_DIR / 'scripting.py'
 RENDERS_ROOT = SCRIPT_DIR / 'renders'
-FIXED_PARAMS = SCRIPT_DIR / 'bo_results_tactile' / 'best_params.json'
-RGB_PARAMS   = SCRIPT_DIR / 'bo_results' / 'best_rgb_params.json'
+FIXED_PARAMS = SCRIPT_DIR / 'bo_results' / 'tactile' / 'best_params.json'
+RGB_PARAMS   = SCRIPT_DIR / 'bo_results' / 'rgb' / 'best_rgb_params.json'
 
 BLENDER_TIMEOUT = 7200  # 2 hours per session (generous)
 

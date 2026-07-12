@@ -91,11 +91,11 @@ from mathutils import Euler
 _PROJ_DIR = os.path.dirname(os.path.abspath(__file__))
 FIXED_PARAMS_PATH = os.environ.get(
     'GELSIGHT_FIXED_PARAMS',
-    os.path.join(_PROJ_DIR, 'bo_results_tactile', 'best_params.json'),
+    os.path.join(_PROJ_DIR, 'bo_results', 'tactile', 'best_params.json'),
 )
 RGB_PARAMS_PATH = os.environ.get(
     'GELSIGHT_RGB_PARAMS',
-    os.path.join(_PROJ_DIR, 'bo_results', 'best_rgb_params.json'),
+    os.path.join(_PROJ_DIR, 'bo_results', 'rgb', 'best_rgb_params.json'),
 )
 BG_RENDER_PATH    = os.environ.get('GELSIGHT_BG_RENDER', None)
 
