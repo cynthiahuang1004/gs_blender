@@ -46,8 +46,8 @@ except ImportError:
 # ── Paths ─────────────────────────────────────────────────────────────────────
 SCRIPT_DIR      = os.path.dirname(os.path.abspath(__file__))
 ROOT_DIR        = os.path.dirname(SCRIPT_DIR)
-BLENDER_PATH    = r'C:\Program Files\Blender Foundation\Blender 4.5\blender.exe'
-BASE_IMAGES_DIR = os.path.join(ROOT_DIR, 'real_data', 'base_tactile_images')
+BLENDER_PATH    = '/home/shared/blender-4.2.0-linux-x64/blender'
+BASE_IMAGES_DIR = os.path.join(ROOT_DIR, 'real_data_test', 'base_tactile_images')
 RESULTS_DIR     = os.path.join(ROOT_DIR, 'bo_results', 'tactile')
 os.makedirs(RESULTS_DIR, exist_ok=True)
 
@@ -63,21 +63,14 @@ LOSS_THRESHOLD = 0.06
 # ── Load target image (mean of all base images) ───────────────────────────────
 
 def _load_target():
-    imgs = []
-    for fname in sorted(os.listdir(BASE_IMAGES_DIR)):
-        if fname.lower().endswith(('.jpg', '.jpeg', '.png')):
-            img = cv2.imread(os.path.join(BASE_IMAGES_DIR, fname))
-            if img is None:
-                continue
-            img = cv2.resize(img, TARGET_SIZE).astype(np.float32) / 255.0
-            imgs.append(img)
-    if not imgs:
-        raise RuntimeError(f'No images found in {BASE_IMAGES_DIR}')
-    target = np.mean(imgs, axis=0)
-    # Save target for visual reference
+    target_path = os.path.join(BASE_IMAGES_DIR, '0.jpg')
+    img = cv2.imread(target_path)
+    if img is None:
+        raise RuntimeError(f'Cannot load target image: {target_path}')
+    target = cv2.resize(img, TARGET_SIZE).astype(np.float32) / 255.0
     cv2.imwrite(os.path.join(RESULTS_DIR, 'target_mean.png'),
                 (target * 255).astype(np.uint8))
-    print(f'Target: averaged {len(imgs)} base images → {RESULTS_DIR}/target_mean.png')
+    print(f'Target: {target_path} @ {TARGET_SIZE[0]}×{TARGET_SIZE[1]}')
     return target
 
 

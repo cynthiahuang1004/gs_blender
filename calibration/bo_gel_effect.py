@@ -18,8 +18,8 @@ from bayes_opt import BayesianOptimization
 
 SCRIPT_DIR = Path(__file__).parent
 ROOT_DIR   = SCRIPT_DIR.parent
-NO_GEL_PATH = ROOT_DIR / 'real_data' / 'no_gel.png'
-GEL_PATH = ROOT_DIR / 'real_data' / 'gel.png'
+NO_GEL_PATH = ROOT_DIR / 'real_data_test' / 'no_gel.png'
+GEL_PATH = ROOT_DIR / 'real_data_test' / 'gel.png'
 OUT_DIR = ROOT_DIR / 'bo_results' / 'gel_fx'
 OUT_DIR.mkdir(exist_ok=True)
 

@@ -24,6 +24,19 @@ old_version/renders_version1
 gelsight_sampler_old.blend
 gelsight_sampler.blend1
 
+# Real dataset (downloaded, large) — calibration refs live in real_data_test/
+real_data/
+real_data.zip
+
+# Compressed renders for transfer
+renders_tar/
+
+# Google service account key — never commit
+gelsight-blender-*.json
+
+# Tuning scratch output
+calibration/tune_output/
+
 # Logs
 nohup.out
 

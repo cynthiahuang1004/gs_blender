@@ -27,17 +27,17 @@ OBJ_DEPTH_MAX = 0.0018
 FOV_MIN = 20
 FOV_MAX = 60
 
-LENGTH_MIN = 0.0075
-LENGTH_MAX = 0.0125
+LENGTH_MIN = 0.0105  # fixed: 21mm view width
+LENGTH_MAX = 0.0105
 
-SMOOTHNESS_MIN = 30
-SMOOTHNESS_MAX = 50
+SMOOTHNESS_MIN = 45  # fixed (randrange excludes stop, so 45..46 -> always 45)
+SMOOTHNESS_MAX = 46
 
 # GelSurface 材質參數
-GEL_ROUGHNESS_MIN = 0.4   #0=鏡面反射, 1=完全漫反射
-GEL_ROUGHNESS_MAX = 0.6
-GEL_FAC_MIN = 0.2   # 0=全透明, 1=全反光
-GEL_FAC_MAX = 0.3
+GEL_ROUGHNESS_MIN = 0.5   # fixed. 0=鏡面反射, 1=完全漫反射
+GEL_ROUGHNESS_MAX = 0.5
+GEL_FAC_MIN = 0.2   # fixed. 0=全透明, 1=全反光
+GEL_FAC_MAX = 0.2
 
 AO_DISTANCE = 0.01  # AO 搜尋半徑 (m)；3mm 對應 gel 包住 cross tube 凹谷尺度
 DARK_BASE_GAIN = 0.9  # gel 整體反射倍率：1.0=不壓暗、0.0=全黑；contact 想更黑就調小
@@ -504,7 +504,7 @@ class create_sensor():
         self.light_type = light_type
         self.angle = angle
         self.emittors = [[top_str, top_col], [bot_str, bot_col], [lef_str, lef_col], [rig_str, rig_col]]
-        self.fov = 40.0  # fixed FOV
+        self.fov = 60.0  # fixed tactile FOV (RGB renders pass 40 explicitly)
         self.roughness = roughness
         self.length = length
         self.lg_str   = None   # RGreenEmittor  (image: 右)
@@ -529,7 +529,7 @@ class create_sensor():
             self.emittors[2][1] = (float(content[13]), float(content[14]), float(content[15]), 1)
             self.emittors[3][0] = float(content[16])
             self.emittors[3][1] = (float(content[17]), float(content[18]), float(content[19]), 1)
-            self.fov = 40.0  # fixed FOV, ignore saved value
+            self.fov = 60.0  # fixed tactile FOV, ignore saved value
             self.roughness = float(content[21])
             self.length = float(content[22])
         else:
@@ -564,13 +564,13 @@ class create_sensor():
     def _apply_fixed(self, p):
         """Lighting from BO; gel/camera randomized within physical ranges."""
         # Gel & camera — randomized (BO can't optimize these from background-only renders)
-        self.smoothness    = random.randrange(30, 45)
+        self.smoothness    = 45
         self.scale         = 0.4918   # matches scripting_bo.py hardcoded value
         self.light_rot_z   = -math.pi # matches scripting_bo.py rot_z=-3.14159
-        self.fov           = 40.0
+        self.fov           = 60.0
         self.roughness     = ru(ROUGH_MIN, ROUGH_MAX)
-        self.gel_roughness = float(p.get('gel_roughness', 0.45))
-        self.gel_fac       = float(p.get('gel_fac', 0.25))
+        self.gel_roughness = float(p.get('gel_roughness', 0.5))
+        self.gel_fac       = float(p.get('gel_fac', 0.2))
         self.length        = ru(LENGTH_MIN, LENGTH_MAX)
         self.angle         = 'str'
         self.light_type    = 'long'
@@ -654,7 +654,7 @@ class create_sensor():
 
         self.smoothness = random.randrange(SMOOTHNESS_MIN, SMOOTHNESS_MAX)
         self.scale = ru(SCALE_MIN, SCALE_MAX)
-        self.fov = 40.0
+        self.fov = 60.0
         self.roughness = ru(ROUGH_MIN, ROUGH_MAX)
         self.gel_roughness = ru(GEL_ROUGHNESS_MIN, GEL_ROUGHNESS_MAX)
         self.gel_fac = ru(GEL_FAC_MIN, GEL_FAC_MAX)
@@ -1564,14 +1564,14 @@ if __name__ == '__main__':
             # RGB render (high camera)
             rgb_dir = os.path.join(sensor_dir, 'rgb')
             os.makedirs(rgb_dir, exist_ok=True)
-            render_rgb_sample(obj, sensor.fov,
+            render_rgb_sample(obj, 40.0,
                               os.path.join(rgb_dir, overall_idx_formatted))
 
             # RGB render (contact camera) at same height as tactile
             tactile_cam_z = bpy.data.objects['Camera'].location[2]
             rgb_contact_dir = os.path.join(sensor_dir, 'rgb_contact')
             os.makedirs(rgb_contact_dir, exist_ok=True)
-            render_rgb_sample(obj, sensor.fov,
+            render_rgb_sample(obj, 40.0,
                               os.path.join(rgb_contact_dir, overall_idx_formatted),
                               cam_z=tactile_cam_z)
 

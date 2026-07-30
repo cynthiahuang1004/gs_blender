@@ -51,7 +51,7 @@ LOSS_THRESHOLD = 0.05
 # ── Load targets (all real RGB images) ─────────────────────────
 def _load_targets():
     targets = []
-    img_dir = os.path.join(ROOT_DIR, 'real_data', 'rgb_images')
+    img_dir = os.path.join(ROOT_DIR, 'real_data_test', 'rgb_images')
     fnames = sorted(f for f in os.listdir(img_dir)
                     if f.lower().endswith(('.jpg', '.jpeg', '.png')))
     for fname in fnames:
