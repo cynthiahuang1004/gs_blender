@@ -94,6 +94,14 @@ from mathutils import Euler
 
 
 _PROJ_DIR = os.path.dirname(os.path.abspath(__file__))
+
+# CPU render 模式（render_dataset.py --cpu）
+if os.environ.get('GELSIGHT_FORCE_CPU'):
+    try:
+        bpy.context.scene.cycles.device = 'CPU'
+        print('[scripting] Cycles device forced to CPU')
+    except Exception:
+        pass
 FIXED_PARAMS_PATH = os.environ.get(
     'GELSIGHT_FIXED_PARAMS',
     os.path.join(_PROJ_DIR, 'bo_results', 'tactile', 'best_params.json'),

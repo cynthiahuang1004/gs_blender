@@ -39,7 +39,7 @@ RENDERS_ROOT = SCRIPT_DIR / 'renders_v3'
 FIXED_PARAMS = SCRIPT_DIR / 'bo_results' / 'tactile_v2' / 'best_params.json'
 RGB_PARAMS   = SCRIPT_DIR / 'bo_results' / 'rgb' / 'best_rgb_params.json'
 
-BLENDER_TIMEOUT = 7200  # 2 hours per session (generous)
+BLENDER_TIMEOUT = 21600  # 6 hours per session (CPU render 較慢，放寬)
 
 
 def _n_expected(session_dir: Path) -> int:
@@ -74,19 +74,28 @@ def is_complete(session_dir: Path) -> bool:
     return True
 
 
-def run_session(session_dir: Path, gpu_id: int = 0) -> bool:
+def run_session(session_dir: Path, gpu_id: int = 0, cpu: bool = False,
+                threads: int = 0) -> bool:
     env = os.environ.copy()
     env['GELSIGHT_RENDER_DIR']   = str(session_dir)
     env['GELSIGHT_FIXED_PARAMS'] = str(FIXED_PARAMS)
     env['GELSIGHT_RGB_PARAMS']   = str(RGB_PARAMS)
-    env['CUDA_VISIBLE_DEVICES']  = str(gpu_id)
     env['PYTHONUNBUFFERED']      = '1'
+    if cpu:
+        env['CUDA_VISIBLE_DEVICES'] = '-1'
+        env['GELSIGHT_FORCE_CPU']   = '1'
+    else:
+        env['CUDA_VISIBLE_DEVICES'] = str(gpu_id)
+
+    cmd = [str(BLENDER), '--background', str(BLEND_FILE),
+           '--python', str(SCRIPTING)]
+    if threads > 0:
+        cmd[1:1] = ['-t', str(threads)]
 
     log_path = session_dir / 'render.log'
     with open(log_path, 'w') as log_f:
         result = subprocess.run(
-            [str(BLENDER), '--background', str(BLEND_FILE),
-             '--python', str(SCRIPTING)],
+            cmd,
             env=env, cwd=str(SCRIPT_DIR),
             stdout=log_f, stderr=subprocess.STDOUT,
             timeout=BLENDER_TIMEOUT,
@@ -100,15 +109,16 @@ def run_session(session_dir: Path, gpu_id: int = 0) -> bool:
 
 def _worker(args):
     """Top-level function for ProcessPoolExecutor (must be picklable)."""
-    session_dir, gpu_id, index, total = args
+    session_dir, gpu_id, index, total, cpu, threads = args
     obj_name  = session_dir.parent.name
     sess_name = session_dir.name
     n_exp     = _n_expected(session_dir)
-    prefix    = f'[{index:3d}/{total}] GPU{gpu_id} {obj_name}/{sess_name} ({n_exp} samples)'
+    dev       = 'CPU' if cpu else f'GPU{gpu_id}'
+    prefix    = f'[{index:3d}/{total}] {dev} {obj_name}/{sess_name} ({n_exp} samples)'
 
     print(f'{prefix}  ...', flush=True)
     t0 = time.time()
-    ok = run_session(session_dir, gpu_id=gpu_id)
+    ok = run_session(session_dir, gpu_id=gpu_id, cpu=cpu, threads=threads)
     elapsed = time.time() - t0
 
     if ok:
@@ -155,6 +165,10 @@ def main():
     parser.add_argument('--root', type=str, default=None,
                         help='Output root dir (default: renders_v3; the old renders/ '
                              'dataset must not be overwritten)')
+    parser.add_argument('--cpu', action='store_true',
+                        help='Render on CPU (hides CUDA devices, forces Cycles CPU)')
+    parser.add_argument('--threads', type=int, default=0,
+                        help='Blender threads per worker (-t); 0 = auto')
     args = parser.parse_args()
 
     global RENDERS_ROOT
@@ -177,7 +191,10 @@ def main():
     print(f'  renders root : {RENDERS_ROOT}')
     print(f'  fixed params : {FIXED_PARAMS}')
     print(f'  sessions     : {total}  (done={n_done}  todo={n_todo})')
-    print(f'  GPUs         : {gpu_ids}  ({n_workers} workers)')
+    if args.cpu:
+        print(f'  device       : CPU  ({n_workers} workers, {args.threads or "auto"} threads each)')
+    else:
+        print(f'  GPUs         : {gpu_ids}  ({n_workers} workers)')
     print('=' * 60)
 
     if args.dry_run:
@@ -192,7 +209,7 @@ def main():
     work_items = []
     for i, session_dir in enumerate(todo):
         gpu_id = gpu_ids[i % len(gpu_ids)]
-        work_items.append((session_dir, gpu_id, i + 1, n_todo))
+        work_items.append((session_dir, gpu_id, i + 1, n_todo, args.cpu, args.threads))
 
     with ProcessPoolExecutor(max_workers=n_workers) as executor:
         futures = {executor.submit(_worker, item): item for item in work_items}
