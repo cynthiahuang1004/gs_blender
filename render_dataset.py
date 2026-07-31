@@ -30,7 +30,8 @@ from pathlib import Path
 from concurrent.futures import ProcessPoolExecutor, as_completed
 
 SCRIPT_DIR   = Path(__file__).parent
-BLENDER      = Path('/home/shared/blender-4.2.0-linux-x64/blender')
+BLENDER      = Path(os.environ.get('GELSIGHT_BLENDER',
+                                   '/home/shared/blender-4.2.0-linux-x64/blender'))
 BLEND_FILE   = SCRIPT_DIR / 'gelsight_sampler.blend'
 SCRIPTING    = SCRIPT_DIR / 'scripting.py'
 # Default output root is renders_v3 — the old renders/ dataset (pre-2026-07 params)
