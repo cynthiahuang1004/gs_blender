@@ -102,6 +102,16 @@ if os.environ.get('GELSIGHT_FORCE_CPU'):
         print('[scripting] Cycles device forced to CPU')
     except Exception:
         pass
+
+# 靜態幾何（gel/燈/相機）BVH 在 render 之間快取，不影響輸出數值
+bpy.context.scene.render.use_persistent_data = True
+
+# 測試用固定 seed（驗證程式碼改動輸出一致性用；正式 render 不設）
+_TEST_SEED = os.environ.get('GELSIGHT_TEST_SEED')
+if _TEST_SEED:
+    random.seed(int(_TEST_SEED))
+    np.random.seed(int(_TEST_SEED) & 0xFFFFFFFF)
+    print(f'[scripting] TEST SEED = {_TEST_SEED}')
 FIXED_PARAMS_PATH = os.environ.get(
     'GELSIGHT_FIXED_PARAMS',
     os.path.join(_PROJ_DIR, 'bo_results', 'tactile', 'best_params.json'),
@@ -174,7 +184,9 @@ def _boost_sat_center(rgb, factor, dist):
 def _gel_fx(png_path):
     img_bpy = bpy.data.images.load(png_path)
     W, H = img_bpy.size[0], img_bpy.size[1]
-    px = np.array(img_bpy.pixels[:], dtype=np.float32).reshape(H, W, 4)
+    px = np.empty(W * H * 4, dtype=np.float32)
+    img_bpy.pixels.foreach_get(px)
+    px = px.reshape(H, W, 4)
     bpy.data.images.remove(img_bpy)
 
     # 1. Barrel distortion (primary)
@@ -266,7 +278,7 @@ def _gel_fx(png_path):
 
     out_img = bpy.data.images.new('_gel_tmp', W, H, alpha=False)
     out_px = np.ones((H, W, 4), dtype=np.float32); out_px[:,:,:3] = rgb
-    out_img.pixels = out_px.flatten().tolist()
+    out_img.pixels.foreach_set(np.ascontiguousarray(out_px.reshape(-1)))
     out_img.filepath_raw = png_path
     out_img.file_format = 'PNG'
     out_img.save()
@@ -370,12 +382,22 @@ def render_rgb_sample(obj_name, fov_deg, out_path, cam_z=None):
     orig_mode  = scene.render.image_settings.color_mode
     orig_fp    = scene.render.filepath
 
+    # 測試用：RGB render 的 sample 數覆蓋（GELSIGHT_RGB_SAMPLES；預設不變）
+    _rgb_samples = os.environ.get('GELSIGHT_RGB_SAMPLES')
+    _orig_samples = None
+    if _rgb_samples:
+        _orig_samples = scene.cycles.samples
+        scene.cycles.samples = int(_rgb_samples)
+
     scene.use_nodes = False
     scene.render.film_transparent = False
     scene.render.image_settings.color_mode = 'RGB'
     scene.render.filepath = out_path
     scene.frame_set(0)
     bpy.ops.render.render(write_still=True)
+
+    if _orig_samples is not None:
+        scene.cycles.samples = _orig_samples
 
     _gel_fx(out_path + '.png')
 
@@ -866,28 +888,29 @@ class create_sensor():
             set_emittor('TLEmittor', self.emittors[2][0] * 5, self.emittors[2][1])
             set_emittor('BREmittor', self.emittors[3][0] * 5, self.emittors[3][1])
 
-def get_depth(dir) -> None:
-    import glob
-
-    scene = bpy.context.scene
-    tree = scene.node_tree
-
+def _attach_depth_output(slot_prefix='gs_depth_tmp_'):
+    """掛上 depth EXR 輸出節點；下一次 render 會同時寫出 depth（省一次 re-render）。"""
+    tree = bpy.context.scene.node_tree
     rl_node = next(n for n in tree.nodes if n.type == 'R_LAYERS')
     fo_node = tree.nodes.new('CompositorNodeOutputFile')
     fo_node.format.file_format = 'OPEN_EXR'
     fo_node.format.color_depth = '32'
     fo_node.base_path = _SESSION_TMP_DIR
-    fo_node.file_slots[0].path = 'gs_depth_tmp_'
-
+    fo_node.file_slots[0].path = slot_prefix
     tree.links.new(rl_node.outputs['Depth'], fo_node.inputs[0])
-    bpy.ops.render.render(write_still=False)
+    return fo_node
 
-    exr_files = sorted(glob.glob(os.path.join(_SESSION_TMP_DIR, 'gs_depth_tmp_*.exr')))
+
+def _finish_depth_output(fo_node, out_path, slot_prefix='gs_depth_tmp_'):
+    """讀取剛剛 render 寫出的 depth EXR → npy，並移除輸出節點。"""
+    import glob
+    exr_files = sorted(glob.glob(os.path.join(_SESSION_TMP_DIR, slot_prefix + '*.exr')))
     exr_path = exr_files[-1]
     exr_img = bpy.data.images.load(exr_path)
     w, h = exr_img.size
-    dmap = np.array(exr_img.pixels[:], dtype=np.float32).reshape(h, w, exr_img.channels)
-    dmap = dmap[:, :, 0]
+    buf = np.empty(w * h * exr_img.channels, dtype=np.float32)
+    exr_img.pixels.foreach_get(buf)
+    dmap = buf.reshape(h, w, exr_img.channels)[:, :, 0]
 
     dmap = np.rot90(dmap, k=2)
     dmap = np.fliplr(dmap)
@@ -898,16 +921,22 @@ def get_depth(dir) -> None:
     dmap = cam_z - dmap
     dmap[background_mask] = 0.0
 
-    np.save(dir, dmap)
+    np.save(out_path, dmap)
 
-    tree.nodes.remove(fo_node)
+    bpy.context.scene.node_tree.nodes.remove(fo_node)
     bpy.data.images.remove(exr_img)
     os.remove(exr_path)
 
 
-def get_gt_depth(dir, obj_name) -> None:
-    import glob
+def get_depth(dir) -> None:
+    """單獨 re-render 拿 sensor depth（保留給舊流程；dataset 迴圈已改用
+    _attach/_finish_depth_output 併入 tactile render）。"""
+    fo_node = _attach_depth_output()
+    bpy.ops.render.render(write_still=False)
+    _finish_depth_output(fo_node, dir)
 
+
+def get_gt_depth(dir, obj_name) -> None:
     gel_objects = ['GelSurface', 'InterfaceSurface', 'EpoxySurface']
     gel_visibility = {}
     for name in gel_objects:
@@ -918,39 +947,18 @@ def get_gt_depth(dir, obj_name) -> None:
     bpy.data.objects[obj_name].hide_render = False
 
     scene = bpy.context.scene
-    tree = scene.node_tree
 
-    rl_node = next(n for n in tree.nodes if n.type == 'R_LAYERS')
-    fo_node = tree.nodes.new('CompositorNodeOutputFile')
-    fo_node.format.file_format = 'OPEN_EXR'
-    fo_node.format.color_depth = '32'
-    fo_node.base_path = _SESSION_TMP_DIR
-    fo_node.file_slots[0].path = 'gs_gt_depth_tmp_'
+    # GT depth 只取 Z pass，不隨 sample 數累積 — 64 與 1024 逐 bit 相同（已實測驗證）
+    _gt_samples = int(os.environ.get('GELSIGHT_GT_SAMPLES', '64'))
+    _orig_samples = scene.cycles.samples
+    if _gt_samples > 0:
+        scene.cycles.samples = _gt_samples
 
-    tree.links.new(rl_node.outputs['Depth'], fo_node.inputs[0])
+    fo_node = _attach_depth_output(slot_prefix='gs_gt_depth_tmp_')
     bpy.ops.render.render(write_still=False)
+    _finish_depth_output(fo_node, dir, slot_prefix='gs_gt_depth_tmp_')
 
-    exr_files = sorted(glob.glob(os.path.join(_SESSION_TMP_DIR, 'gs_gt_depth_tmp_*.exr')))
-    exr_path = exr_files[-1]
-    exr_img = bpy.data.images.load(exr_path)
-    w, h = exr_img.size
-    dmap = np.array(exr_img.pixels[:], dtype=np.float32).reshape(h, w, exr_img.channels)
-    dmap = dmap[:, :, 0]
-
-    dmap = np.rot90(dmap, k=2)
-    dmap = np.fliplr(dmap)
-
-    cam_z = abs(bpy.data.objects['Camera'].location[2])
-    background_mask = dmap > (cam_z * 0.99)
-    dmap[background_mask] = 0.0
-    dmap = cam_z - dmap
-    dmap[background_mask] = 0.0
-
-    np.save(dir, dmap)
-
-    tree.nodes.remove(fo_node)
-    bpy.data.images.remove(exr_img)
-    os.remove(exr_path)
+    scene.cycles.samples = _orig_samples
 
     for name, vis in gel_visibility.items():
         bpy.data.objects[name].hide_render = vis
@@ -1313,7 +1321,9 @@ def _tactile_post_fx(png_path, dmap_path=None):
     dmap_path: GT depth npy for the contact-driven warp (None → bg warp only)."""
     img_bpy = bpy.data.images.load(png_path)
     W, H = img_bpy.size[0], img_bpy.size[1]
-    px = np.array(img_bpy.pixels[:], dtype=np.float32).reshape(H, W, 4)
+    px = np.empty(W * H * 4, dtype=np.float32)
+    img_bpy.pixels.foreach_get(px)
+    px = px.reshape(H, W, 4)
     bpy.data.images.remove(img_bpy)
     rgb = np.clip(px[:, :, :3], 0, 1)
 
@@ -1363,7 +1373,7 @@ def _tactile_post_fx(png_path, dmap_path=None):
     out_px = np.ones((H, W, 4), dtype=np.float32)
     out_px[:, :, :3] = rgb
     out_img = bpy.data.images.new('_post_tmp', W, H, alpha=False)
-    out_img.pixels = out_px.flatten().tolist()
+    out_img.pixels.foreach_set(np.ascontiguousarray(out_px.reshape(-1)))
     out_img.filepath_raw = png_path
     out_img.file_format = 'PNG'
     out_img.save()
@@ -1726,6 +1736,7 @@ if __name__ == '__main__':
             sensor.apply()
 
             tactile_path = os.path.join(sensor_dir, 'samples', overall_idx_formatted)
+            _depth_fo = _attach_depth_output()   # tactile render 同時輸出 sensor depth
             bpy.context.scene.render.filepath = tactile_path
             bpy.context.scene.frame_set(0)
             bpy.ops.render.render(write_still=True)
@@ -1754,7 +1765,8 @@ if __name__ == '__main__':
             with open(pose_path, 'w') as f:
                 json.dump(pose, f, indent=2)
 
-            get_depth(os.path.join(sensor_dir, 'raw_data', f'{overall_idx_formatted}.npy'))
+            _finish_depth_output(_depth_fo,
+                                 os.path.join(sensor_dir, 'raw_data', f'{overall_idx_formatted}.npy'))
             _gt_npy_path = os.path.join(sensor_dir, 'raw_data', f'{overall_idx_formatted}_gt.npy')
             get_gt_depth(_gt_npy_path, obj)
 
