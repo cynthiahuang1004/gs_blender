@@ -928,6 +928,29 @@ def _finish_depth_output(fo_node, out_path, slot_prefix='gs_depth_tmp_'):
     os.remove(exr_path)
 
 
+def _sample_file_ok(path):
+    """檔案存在且完整：PNG 驗 IEND 結尾、npy 驗 header/長度、json 驗 parse。
+    （被 kill 時寫到一半的截斷檔案會被視為不存在 → 該 sample 重跑）"""
+    try:
+        size = os.path.getsize(path)
+        if size == 0:
+            return False
+        if path.endswith('.png'):
+            with open(path, 'rb') as f:
+                f.seek(max(0, size - 12))
+                return b'IEND' in f.read()
+        if path.endswith('.npy'):
+            np.load(path, mmap_mode='r')   # header + 長度驗證，不讀資料
+            return True
+        if path.endswith('.json'):
+            with open(path) as f:
+                json.load(f)
+            return True
+        return True
+    except Exception:
+        return False
+
+
 def get_depth(dir) -> None:
     """單獨 re-render 拿 sensor depth（保留給舊流程；dataset 迴圈已改用
     _attach/_finish_depth_output 併入 tactile render）。"""
@@ -1713,10 +1736,11 @@ if __name__ == '__main__':
         overall_idx_formatted = '{0:04}'.format(overall_idx)
 
         # Resume support: skip samples that already have all output files
+        # （_sample_file_ok 同時驗證完整性，截斷檔案 → 重跑該 sample）
         _skip = True
         for _si, _sn in enumerate(sensors):
             _sd = os.path.join(render_dir, f'sensor_{_si:04d}')
-            if not all(os.path.exists(p) for p in [
+            if not all(_sample_file_ok(p) for p in [
                 os.path.join(_sd, 'samples', f'{overall_idx_formatted}.png'),
                 os.path.join(_sd, 'raw_data', f'{overall_idx_formatted}_pose.json'),
                 os.path.join(_sd, 'raw_data', f'{overall_idx_formatted}.npy'),

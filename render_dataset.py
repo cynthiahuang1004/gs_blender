@@ -26,6 +26,7 @@ Usage
 """
 
 import os, json, subprocess, time, argparse
+import numpy as np
 from pathlib import Path
 from concurrent.futures import ProcessPoolExecutor, as_completed
 
@@ -55,6 +56,29 @@ def _n_expected(session_dir: Path) -> int:
     return s.get('NUM_OBJ_SAMPLES', 0)
 
 
+def _file_ok(p: Path) -> bool:
+    """存在且完整：PNG 驗 IEND、npy 驗 header/長度、json 驗 parse。"""
+    try:
+        size = p.stat().st_size
+        if size == 0:
+            return False
+        s = str(p)
+        if s.endswith('.png'):
+            with open(p, 'rb') as f:
+                f.seek(max(0, size - 12))
+                return b'IEND' in f.read()
+        if s.endswith('.npy'):
+            np.load(s, mmap_mode='r')
+            return True
+        if s.endswith('.json'):
+            with open(p) as f:
+                json.load(f)
+            return True
+        return True
+    except Exception:
+        return False
+
+
 def is_complete(session_dir: Path) -> bool:
     n = _n_expected(session_dir)
     if n == 0:
@@ -70,7 +94,7 @@ def is_complete(session_dir: Path) -> bool:
             sensor / 'raw_data' / f'{idx}_gt.npy',
             sensor / 'raw_data' / f'{idx}_pose.json',
         ]
-        if not all(f.exists() and f.stat().st_size > 0 for f in files):
+        if not all(_file_ok(f) for f in files):
             return False
     return True
 
