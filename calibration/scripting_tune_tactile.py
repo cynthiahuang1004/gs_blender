@@ -199,7 +199,7 @@ if OBJ_FILE and os.path.exists(OBJ_FILE):
         imported_name = mesh_objs[0]
         obj = bpy.data.objects[imported_name]
         obj.rotation_euler = OBJ_ROTATION
-        s = 1.0 / OBJ_SCALE if OBJ_SCALE > 1 else OBJ_SCALE
+        s = 1.0 / OBJ_SCALE  # dataset convention: obj.scale = 1 / fixed_scale (always)
         obj.scale = (s, s, s)
         bpy.context.view_layer.update()
 
@@ -257,13 +257,16 @@ if os.environ.get('TUNE_GT_DEPTH', '') and OBJ_FILE and mesh_objs:
     fo_node = tree.nodes.new('CompositorNodeOutputFile')
     fo_node.format.file_format = 'OPEN_EXR'
     fo_node.format.color_depth = '32'
-    fo_node.base_path = os.path.dirname(RENDER_PATH)
+    # 每個 run 用獨立子目錄放 EXR，避免平行執行時 glob 撿到別的 process 的檔案
+    _gt_tmp_dir = RENDER_PATH + '_gttmp'
+    os.makedirs(_gt_tmp_dir, exist_ok=True)
+    fo_node.base_path = _gt_tmp_dir
     fo_node.file_slots[0].path = 'gt_depth_tmp_'
     tree.links.new(rl_node.outputs['Depth'], fo_node.inputs[0])
     scene.use_nodes = True
     bpy.ops.render.render(write_still=False)
 
-    exr_files = sorted(glob.glob(os.path.join(os.path.dirname(RENDER_PATH), 'gt_depth_tmp_*.exr')))
+    exr_files = sorted(glob.glob(os.path.join(_gt_tmp_dir, 'gt_depth_tmp_*.exr')))
     exr_img = bpy.data.images.load(exr_files[-1])
     w, h = exr_img.size
     dmap = np.array(exr_img.pixels[:], dtype=np.float32).reshape(h, w, exr_img.channels)[:, :, 0]
@@ -277,6 +280,10 @@ if os.environ.get('TUNE_GT_DEPTH', '') and OBJ_FILE and mesh_objs:
     np.save(RENDER_PATH + '_gt.npy', dmap)
     for f in exr_files:
         os.remove(f)
+    try:
+        os.rmdir(_gt_tmp_dir)
+    except OSError:
+        pass
     print(f'[tune] saved GT depth: {RENDER_PATH}_gt.npy')
 
 sys.stdout.flush()

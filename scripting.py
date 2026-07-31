@@ -22,29 +22,34 @@ CALIB_DEPTH_MAX = 0.0018
 OBJ_DEPTH_MIN = 0.0006
 OBJ_DEPTH_MAX = 0.0018
 
+# ── 按壓深度（與 real data 慣例一致）───────────────────────────
+# tactile 與 GT depth 用同一個按壓深度，每個 sample 在範圍內隨機
+PRESS_DEPTH_MIN = 0.0008   # 0.8mm
+PRESS_DEPTH_MAX = 0.0012   # 1.2mm
+
 # sensor parameters config
 
 FOV_MIN = 20
 FOV_MAX = 60
 
-LENGTH_MIN = 0.0105  # fixed: 21mm view width
-LENGTH_MAX = 0.0105
+LENGTH_MIN = 0.008751  # fixed: 17.5mm view width（與 real GT 的 camera_length 一致）
+LENGTH_MAX = 0.008751
 
-SMOOTHNESS_MIN = 45  # fixed (randrange excludes stop, so 45..46 -> always 45)
-SMOOTHNESS_MAX = 46
+SMOOTHNESS_MIN = 35  # fixed (randrange excludes stop, so 35..36 -> always 35)
+SMOOTHNESS_MAX = 36
 
 # GelSurface 材質參數
-GEL_ROUGHNESS_MIN = 0.5   # fixed. 0=鏡面反射, 1=完全漫反射
-GEL_ROUGHNESS_MAX = 0.5
-GEL_FAC_MIN = 0.2   # fixed. 0=全透明, 1=全反光
-GEL_FAC_MAX = 0.2
+GEL_ROUGHNESS_MIN = 0.45  # fixed. 0=鏡面反射, 1=完全漫反射
+GEL_ROUGHNESS_MAX = 0.45
+GEL_FAC_MIN = 0.17  # fixed. 0=全透明, 1=全反光
+GEL_FAC_MAX = 0.17
 
 AO_DISTANCE = 0.01  # AO 搜尋半徑 (m)；3mm 對應 gel 包住 cross tube 凹谷尺度
 DARK_BASE_GAIN = 0.9  # gel 整體反射倍率：1.0=不壓暗、0.0=全黑；contact 想更黑就調小
-CONTACT_Z_THRESH  = -0.001  # 世界 z 小於這個值 → 最暗（contact）
-BG_Z_THRESH       =  0.0005  # 世界 z 大於這個值 → 最亮（背景）
-# Contact 最暗區的 sRGB 色 (0~255)，預設 (75, 38, 55) 暗紫紅
-CONTACT_DARK_COLOR = (60/255, 60/255, 60/255, 1.0)
+CONTACT_Z_THRESH  = -PRESS_DEPTH_MAX  # 最暗錨在最大按壓深度 1.2mm：按 0.8mm 只到 ~2/3 深的顏色（深度→顏色深淺）
+BG_Z_THRESH       =  0.00005   # 世界 z 大於這個值 → 最亮（背景，需低於平坦 gel z≈+0.06mm）
+# Contact 最暗區顏色：深灰綠
+CONTACT_DARK_COLOR = (0.12, 0.19, 0.13, 1.0)
 
 # 反射率
 ROUGH_MIN = 0.4
@@ -171,6 +176,10 @@ def _gel_fx(png_path):
     if abs(RGB_REFRACT_K2) > 1e-4:
         rgb = _barrel(rgb, RGB_REFRACT_K2)
 
+    # 2.5 Global gaussian blur (uniform, camera softness)
+    if RGB_GLOBAL_BLUR > 0.1:
+        rgb = _gaussian_blur_ch(rgb, RGB_GLOBAL_BLUR)
+
     # 3. Radial blur (center sharp, edge blurry)
     blurred = _gaussian_blur_ch(rgb, RGB_BLUR_SIGMA)
     cy3, cx3 = H / 2.0, W / 2.0
@@ -213,10 +222,16 @@ def _gel_fx(png_path):
     # 10. Saturation boost (center-weighted)
     rgb = _boost_sat_center(rgb, RGB_SAT_BOOST, dist3)
 
-    # 11. Specular highlight (simulated gel surface reflection)
+    # 10.5 Brightness / exposure
+    if abs(RGB_BRIGHTNESS - 1.0) > 1e-4:
+        rgb = np.clip(rgb * RGB_BRIGHTNESS, 0, 1)
+
+    # 11. Specular highlight (simulated gel surface reflection, offset center)
     if RGB_SPEC_STR > 1e-4:
-        spec_dist = np.sqrt(((yy3-cy3)/cy3)**2 + ((xx3-cx3)/cx3)**2)
-        spec = np.exp(-spec_dist**2 / (2 * RGB_SPEC_SIZE**2))
+        scx = cx3 + RGB_SPEC_CX * cx3
+        scy = cy3 + RGB_SPEC_CY * cy3
+        spec_dist = np.sqrt(((yy3-scy)/cy3)**2 + ((xx3-scx)/cx3)**2)
+        spec = np.exp(-spec_dist**2 / (2 * max(RGB_SPEC_SIZE, 1e-3)**2))
         rgb = np.clip(rgb + spec[:,:,None] * RGB_SPEC_STR, 0, 1)
 
     # 12. Edge darkening (object boundary darkening from gel thickness)
@@ -235,6 +250,11 @@ def _gel_fx(png_path):
     # 14. Vignette (edge darkening)
     mask = np.clip(1.0 - dist3**2 * RGB_VIGNETTE, 0, 1)[:,:,None]
     rgb = np.clip(rgb * mask, 0, 1)
+
+    # 15. White balance
+    rgb[:,:,0] = np.clip(rgb[:,:,0] * RGB_WB_R, 0, 1)
+    rgb[:,:,1] = np.clip(rgb[:,:,1] * RGB_WB_G, 0, 1)
+    rgb[:,:,2] = np.clip(rgb[:,:,2] * RGB_WB_B, 0, 1)
 
     out_img = bpy.data.images.new('_gel_tmp', W, H, alpha=False)
     out_px = np.ones((H, W, 4), dtype=np.float32); out_px[:,:,:3] = rgb
@@ -270,10 +290,41 @@ def _setup_platform():
         po.scale          = (0.001, -0.001, 0.001)
         po.rotation_euler = (math.pi / 2, 0.0, -math.pi / 2)
         po.location       = (-0.08, 0.055, 0.04)
-        po.hide_render    = False
+        po.hide_render    = True   # 只在 RGB render 時顯示（gel 半透明會透出 platform）
     bpy.context.view_layer.update()
     _platform_objs_global = new_objs
+    global _platform_initial_mats
+    _platform_initial_mats = [po.matrix_world.copy() for po in new_objs]
     print(f'Platform ready: {[o.name for o in new_objs]}')
+
+
+_platform_initial_mats = []
+
+
+def _set_platform_rotation(rz):
+    """Rotate platform about world Z (through origin = press point) to follow the object."""
+    rot = Euler((0.0, 0.0, rz)).to_matrix().to_4x4()
+    for po, m0 in zip(_platform_objs_global, _platform_initial_mats):
+        po.matrix_world = rot @ m0
+    bpy.context.view_layer.update()
+
+def _rgb_cam_z_for(obj_name, base_rotation, fixed_scale):
+    """High-camera z ∝ 底板尺寸（rz=0 測量）：讓所有物體的方形底板在 RGB 中大小一致。"""
+    o = bpy.data.objects[obj_name]
+    saved_rot = tuple(o.rotation_euler)
+    saved_loc = tuple(o.location)
+    o.scale = (1 / fixed_scale, 1 / fixed_scale, 1 / fixed_scale)
+    o.rotation_euler = (base_rotation[0], base_rotation[1], 0.0)
+    o.location = (0, 0, 0)
+    bpy.context.view_layer.update()
+    xs = [(o.matrix_world @ v.co).x for v in o.data.vertices]
+    ys = [(o.matrix_world @ v.co).y for v in o.data.vertices]
+    base_size = max(max(xs) - min(xs), max(ys) - min(ys))
+    o.rotation_euler = saved_rot
+    o.location = saved_loc
+    bpy.context.view_layer.update()
+    return RGB_CAM_Z * (base_size / RGB_BASE_SIZE_REF), base_size
+
 
 def render_rgb_sample(obj_name, fov_deg, out_path, cam_z=None):
     cam = bpy.data.objects['Camera']
@@ -302,6 +353,8 @@ def render_rgb_sample(obj_name, fov_deg, out_path, cam_z=None):
             vis_save[name] = bpy.data.objects[name].hide_render
             bpy.data.objects[name].hide_render = True
     bpy.data.objects[obj_name].hide_render = False
+    for _po in _platform_objs_global:
+        _po.hide_render = False   # platform 只在 RGB render 可見
 
     scene = bpy.context.scene
     orig_nodes = scene.use_nodes
@@ -323,6 +376,8 @@ def render_rgb_sample(obj_name, fov_deg, out_path, cam_z=None):
     scene.render.image_settings.color_mode = orig_mode
     scene.render.filepath = orig_fp
     bpy.data.objects[obj_name].hide_render = True
+    for _po in _platform_objs_global:
+        _po.hide_render = True
     for name, vis in vis_save.items():
         bpy.data.objects[name].hide_render = vis
     cam.location[2]      = orig_cam_z
@@ -564,44 +619,45 @@ class create_sensor():
     def _apply_fixed(self, p):
         """Lighting from BO; gel/camera randomized within physical ranges."""
         # Gel & camera — randomized (BO can't optimize these from background-only renders)
-        self.smoothness    = 45
+        self.smoothness    = 35
         self.scale         = 0.4918   # matches scripting_bo.py hardcoded value
         self.light_rot_z   = -math.pi # matches scripting_bo.py rot_z=-3.14159
+        self.light_z       = -0.004139  # matches scripting_bo/tune light height
         self.fov           = 60.0
         self.roughness     = ru(ROUGH_MIN, ROUGH_MAX)
-        self.gel_roughness = float(p.get('gel_roughness', 0.5))
-        self.gel_fac       = float(p.get('gel_fac', 0.2))
+        self.gel_roughness = float(p.get('gel_roughness', 0.45))
+        self.gel_fac       = float(p.get('gel_fac', 0.17))
         self.length        = ru(LENGTH_MIN, LENGTH_MAX)
         self.angle         = 'str'
         self.light_type    = 'long'
 
-        # 6 lights fully independent — from BO best params
-        # BLEmittor (image: 右上)
+        # 6 lights fully independent — defaults = 2026-07 manual-tuned final values
+        # BLEmittor (image: 左下) — gray-green
         self.emittors[0] = [
-            float(p.get('top_str',  80.0)),
-            (float(p.get('top_r',  0.937)), float(p.get('top_g',  0.545)), float(p.get('top_b',  1.0)),   1.0),
+            float(p.get('top_str',  54.06)),
+            (float(p.get('top_r',  0.05)), float(p.get('top_g',  0.65)), float(p.get('top_b',  0.02)),  1.0),
         ]
-        # TREmittor (image: 左下)
+        # TREmittor (image: 右上) — blue-purple
         self.emittors[1] = [
-            float(p.get('bot_str',  80.0)),
-            (float(p.get('bot_r',  0.443)), float(p.get('bot_g',  0.278)), float(p.get('bot_b',  0.357)), 1.0),
+            float(p.get('bot_str',  41.03)),
+            (float(p.get('bot_r',  0.3264)), float(p.get('bot_g',  0.2954)), float(p.get('bot_b',  0.8114)), 1.0),
         ]
-        # TLEmittor (image: 右下)
+        # TLEmittor (image: 左上) — weak warm red
         self.emittors[2] = [
-            float(p.get('left_str', 75.0)),
-            (float(p.get('left_r',  1.0)),  float(p.get('left_g',  0.0)),  float(p.get('left_b',  0.486)), 1.0),
+            float(p.get('left_str', 12.0)),
+            (float(p.get('left_r',  0.7205)), float(p.get('left_g',  0.2487)), float(p.get('left_b',  0.128)), 1.0),
         ]
-        # BREmittor (image: 左上)
+        # BREmittor (image: 右下) — orange-red
         self.emittors[3] = [
-            float(p.get('right_str', 75.0)),
-            (float(p.get('right_r', 0.992)), float(p.get('right_g', 0.133)), float(p.get('right_b', 0.373)), 1.0),
+            float(p.get('right_str', 60.0)),
+            (float(p.get('right_r', 0.92)), float(p.get('right_g', 0.18)), float(p.get('right_b', 0.12)), 1.0),
         ]
-        # RGreenEmittor (image: 右)
-        self.lg_str   = float(p.get('lg_str', 40.0))
-        self.lg_color = (float(p.get('lg_r', 0.412)), float(p.get('lg_g', 0.890)), float(p.get('lg_b', 0.475)))
-        # LGreenEmittor (image: 左)
-        self.rg_str   = float(p.get('rg_str', 40.0))
-        self.rg_color = (float(p.get('rg_r', 0.675)), float(p.get('rg_g', 0.725)), float(p.get('rg_b', 0.302)))
+        # RGreenEmittor (image: 右) — green
+        self.lg_str   = float(p.get('lg_str', 28.38))
+        self.lg_color = (float(p.get('lg_r', 0.05)), float(p.get('lg_g', 0.65)), float(p.get('lg_b', 0.09)))
+        # LGreenEmittor (image: 左) — dominant green
+        self.rg_str   = float(p.get('rg_str', 176.33))
+        self.rg_color = (float(p.get('rg_r', 0.03)), float(p.get('rg_g', 0.71)), float(p.get('rg_b', 0.04)))
 
     '''ORIGINAL: def randomize
     def randomize(self):
@@ -781,7 +837,10 @@ class create_sensor():
         rot_z = getattr(self, 'light_rot_z',
                         pi / 4 if self.angle == 'diag' else 0.0)
         rot_mat = Euler((0, 0, rot_z)).to_matrix().to_4x4()
-        co_z = -0.0065 + 0.0011 / self.scale
+        # fixed-params 模式用校準值 -0.004139（與 scripting_bo/tune 一致），否則用公式
+        co_z = getattr(self, 'light_z', None)
+        if co_z is None:
+            co_z = -0.0065 + 0.0011 / self.scale
 
         for name in light_names:
             bpy.data.objects[name].matrix_world = rot_mat @ _LIGHT_INITIAL_MATRICES[name]
@@ -1080,6 +1139,26 @@ def _create_multicolor_material(name, seed, cross_center=(0, 0, 0), obj_rotation
                  quad_mix.outputs[2], QUAD_BASE_COLOR, x=100, y=100)
     links.new(final.outputs[2], bsdf_node.inputs['Base Color'])
     return mat
+# ── RGB 物體顏色（2026-07：取消四象限 multicolor，改用單色）──────
+# 預設 = 原本的藍色（best_rgb_params 的 obj_r/g/b）；下列物體用黑色
+BLACK_OBJS = {
+    'pattern_04_3_lines_angle_2', 'pattern_06_5_lines_angle_1',
+    'pattern_31_rod', 'pattern_32', 'pattern_35', 'pattern_36', 'pattern_37',
+}
+OBJ_BLACK_COLOR = (0.02, 0.02, 0.02, 1.0)
+
+
+def _create_solid_material(name, rgba):
+    mat = bpy.data.materials.new(name=name)
+    mat.use_nodes = True
+    bsdf = mat.node_tree.nodes.get('Principled BSDF')
+    bsdf.inputs['Base Color'].default_value = rgba
+    bsdf.inputs['Roughness'].default_value = _rgb_bo.get('obj_roughness', 0.25)
+    bsdf.inputs['Specular IOR Level'].default_value = 0.5
+    bsdf.inputs['Metallic'].default_value = 0.0
+    return mat
+
+
 RGB_DOF_FOCUS   = 0.085
 RGB_DOF_FSTOP   = _rgb_bo.get('dof_fstop',      1.2)
 RGB_WORLD_STR   = _rgb_bo.get('world_strength',  2.0)
@@ -1105,6 +1184,15 @@ RGB_REFRACT_K2   = _rgb_bo.get('refraction_k2',   0.0)
 RGB_EDGE_DARK    = _rgb_bo.get('edge_darkening',   0.0)
 RGB_GEL_GRAD_STR = _rgb_bo.get('gel_gradient_strength', 0.0)
 RGB_GEL_GRAD_ANG = _rgb_bo.get('gel_gradient_angle',    0.0)
+RGB_GLOBAL_BLUR  = _rgb_bo.get('global_blur_sigma',     0.0)
+RGB_BRIGHTNESS   = _rgb_bo.get('brightness',            1.0)
+RGB_SPEC_CX      = _rgb_bo.get('spec_cx',               0.0)
+RGB_SPEC_CY      = _rgb_bo.get('spec_cy',               0.0)
+RGB_WB_R         = _rgb_bo.get('wb_r',                  1.0)
+RGB_WB_G         = _rgb_bo.get('wb_g',                  1.0)
+RGB_WB_B         = _rgb_bo.get('wb_b',                  1.0)
+RGB_FOV          = _rgb_bo.get('rgb_fov',              55.0)
+RGB_BASE_SIZE_REF = 0.082   # 標準底板 82mm — 相機距離依底板尺寸正規化
 RGB_HIDE_NAMES  = ['GelSurface', 'InterfaceSurface', 'EpoxySurface',
                    'LightSurfaceBL', 'LightSurfaceTR',
                    'LightSurfaceTL', 'LightSurfaceBR',
@@ -1149,6 +1237,131 @@ def _boost_saturation(png_path, factor):
     out_img.file_format = 'PNG'
     out_img.save()
     bpy.data.images.remove(out_img)
+
+
+# ── Tactile 後處理鏈（2026-07 手動校準定案）───────────────────────
+TACTILE_POST_SATURATION = 1.35
+TACTILE_POST_BRIGHTNESS = 1.05
+TACTILE_POST_CONTRAST   = 1.4579
+TACTILE_POST_HAZE       = 0.25   # 乳白霧感（gel 散射）
+
+# Gel 變形 warp：模擬 real gel 受壓變形（每個 sample 隨機、只作用在 tactile 影像，
+# GT depth/pose 不受影響）
+#   - 全域低頻隨機位移場（背景一起輕微波動）
+#   - 接觸區平滑 bulge（沿 GT depth 梯度，方向/強度隨機）
+TACTILE_WARP_BG_AMP      = 3.0   # 全域低頻位移最大幅度 (px)
+TACTILE_WARP_CONTACT_AMP = 3.0   # 接觸區 bulge 幅度 (px)
+TACTILE_WARP_GRID        = 4     # 低頻位移場粗網格大小
+TACTILE_WARP_BLUR_SIGMA  = 25.0  # 接觸位移場的平滑程度 (px)
+
+
+def _gel_deform_warp(rgb, dmap=None):
+    """Combined warp: global low-freq random field + contact-driven smooth bulge."""
+    H, W = rgb.shape[:2]
+    g = TACTILE_WARP_GRID
+
+    def _up(cf):
+        gy = np.linspace(0, g - 1, H)
+        gx = np.linspace(0, g - 1, W)
+        y0 = np.floor(gy).astype(int); y1 = np.minimum(y0 + 1, g - 1)
+        x0 = np.floor(gx).astype(int); x1 = np.minimum(x0 + 1, g - 1)
+        wy = (gy - y0)[:, None]; wx = (gx - x0)[None, :]
+        return (cf[np.ix_(y0, x0)] * (1 - wy) * (1 - wx) +
+                cf[np.ix_(y0, x1)] * (1 - wy) * wx +
+                cf[np.ix_(y1, x0)] * wy * (1 - wx) +
+                cf[np.ix_(y1, x1)] * wy * wx)
+
+    dx = np.zeros((H, W), dtype=np.float32)
+    dy = np.zeros((H, W), dtype=np.float32)
+
+    a = TACTILE_WARP_BG_AMP
+    if a > 0:
+        dx += _up(np.random.uniform(-a, a, (g, g)).astype(np.float32))
+        dy += _up(np.random.uniform(-a, a, (g, g)).astype(np.float32))
+
+    if dmap is not None and TACTILE_WARP_CONTACT_AMP > 0:
+        d = _gaussian_blur_ch((dmap[:, :, None] * 1000.0).astype(np.float32),
+                              TACTILE_WARP_BLUR_SIGMA)[:, :, 0]
+        gy_, gx_ = np.gradient(d)
+        mag = np.sqrt(gx_**2 + gy_**2)
+        if mag.max() > 1e-9:
+            s = (TACTILE_WARP_CONTACT_AMP / mag.max()
+                 * random.uniform(0.5, 1.0) * random.choice([-1.0, 1.0]))
+            dx += (gx_ * s).astype(np.float32)
+            dy += (gy_ * s).astype(np.float32)
+
+    yy, xx = np.mgrid[0:H, 0:W].astype(np.float32)
+    xs = np.clip(xx + dx, 0, W - 1)
+    ys = np.clip(yy + dy, 0, H - 1)
+    x0 = np.floor(xs).astype(int); x1 = np.minimum(x0 + 1, W - 1)
+    y0 = np.floor(ys).astype(int); y1 = np.minimum(y0 + 1, H - 1)
+    wx = (xs - x0)[:, :, None]; wy = (ys - y0)[:, :, None]
+    return (rgb[y0, x0] * (1 - wx) * (1 - wy) + rgb[y0, x1] * wx * (1 - wy) +
+            rgb[y1, x0] * (1 - wx) * wy + rgb[y1, x1] * wx * wy)
+
+
+def _tactile_post_fx(png_path, dmap_path=None):
+    """gel-deform warp → saturation → brightness → contrast → haze.
+    dmap_path: GT depth npy for the contact-driven warp (None → bg warp only)."""
+    img_bpy = bpy.data.images.load(png_path)
+    W, H = img_bpy.size[0], img_bpy.size[1]
+    px = np.array(img_bpy.pixels[:], dtype=np.float32).reshape(H, W, 4)
+    bpy.data.images.remove(img_bpy)
+    rgb = np.clip(px[:, :, :3], 0, 1)
+
+    # Gel-deformation warp (geometric, before color adjustments)
+    _dmap = None
+    if dmap_path is not None and os.path.exists(dmap_path):
+        _dmap = np.load(dmap_path)
+        # png is stored bottom-up relative to the npy orientation
+        _dmap = np.flipud(_dmap)
+    rgb = np.clip(_gel_deform_warp(rgb, _dmap), 0, 1)
+
+    # Saturation (HSV S-channel scale)
+    if abs(TACTILE_POST_SATURATION - 1.0) > 0.01:
+        cmax = rgb.max(axis=2); cmin = rgb.min(axis=2); delta = cmax - cmin
+        v = cmax
+        s = np.where(cmax > 0, delta / np.maximum(cmax, 1e-8), 0.0)
+        h = np.zeros_like(v)
+        m = delta > 0
+        r, g, b = rgb[:, :, 0], rgb[:, :, 1], rgb[:, :, 2]
+        dm = np.maximum(delta, 1e-8)
+        mr = m & (cmax == r); h[mr] = (60 * ((g[mr] - b[mr]) / dm[mr])) % 360
+        mg = m & (cmax == g); h[mg] = 60 * ((b[mg] - r[mg]) / dm[mg] + 2)
+        mb = m & (cmax == b); h[mb] = 60 * ((r[mb] - g[mb]) / dm[mb] + 4)
+        s = np.clip(s * TACTILE_POST_SATURATION, 0.0, 1.0)
+        h6 = h / 60.0; i = np.floor(h6).astype(int) % 6
+        f = h6 - np.floor(h6)
+        p_ = v * (1 - s); q = v * (1 - f * s); t = v * (1 - (1 - f) * s)
+        out = np.zeros_like(rgb)
+        for ii, (r0, g0, b0) in enumerate([(v, t, p_), (q, v, p_), (p_, v, t),
+                                            (p_, q, v), (t, p_, v), (v, p_, q)]):
+            mask = i == ii
+            out[:, :, 0][mask] = r0[mask]
+            out[:, :, 1][mask] = g0[mask]
+            out[:, :, 2][mask] = b0[mask]
+        rgb = out
+
+    # Brightness
+    rgb = np.clip(rgb * TACTILE_POST_BRIGHTNESS, 0, 1)
+    # Contrast
+    rgb = np.clip((rgb - 0.5) * TACTILE_POST_CONTRAST + 0.5, 0, 1)
+    # Haze: blend with blurred version + slight white lift
+    if TACTILE_POST_HAZE > 0.01:
+        a = TACTILE_POST_HAZE
+        glow = _gaussian_blur_ch(rgb, 8.0)
+        rgb = np.clip(rgb * (1 - a) + glow * a + a * (30.0 / 255.0), 0, 1)
+
+    out_px = np.ones((H, W, 4), dtype=np.float32)
+    out_px[:, :, :3] = rgb
+    out_img = bpy.data.images.new('_post_tmp', W, H, alpha=False)
+    out_img.pixels = out_px.flatten().tolist()
+    out_img.filepath_raw = png_path
+    out_img.file_format = 'PNG'
+    out_img.save()
+    bpy.data.images.remove(out_img)
+
+
 mesh_dir = os.path.join(dir, 'meshes')
 
 if __name__ == '__main__':
@@ -1277,7 +1490,7 @@ if __name__ == '__main__':
         move_object('IndenterSurface', (0, 0, -1), (0, 0, 0))
         bpy.context.scene.frame_set(0)
         bpy.ops.render.render(write_still=True)
-        _boost_saturation(calib_out + '.png', TACTILE_SAT_BOOST)
+        _tactile_post_fx(calib_out + '.png')
         overall_calib_idx += 1
 
         qt = (sensor.length * 2) / 3
@@ -1300,7 +1513,7 @@ if __name__ == '__main__':
                 move_object(calib_obj, (x, y, z), (a_x, a_y, a_z))
                 bpy.context.scene.frame_set(0)
                 bpy.ops.render.render(write_still=True)
-                _boost_saturation(calib_out2 + '.png', TACTILE_SAT_BOOST)
+                _tactile_post_fx(calib_out2 + '.png')
                 overall_calib_idx += 1
 
     # setup platform for RGB renders
@@ -1320,29 +1533,16 @@ if __name__ == '__main__':
         obj_name_map[stem] = imported_name
         bpy.data.objects[imported_name].hide_render = True
 
-        # Compute split axes from mesh bounding box (base plane = 2 largest dims)
-        _obj_tmp = bpy.data.objects[imported_name]
-        _dims = list(_obj_tmp.dimensions)
-        _protrusion = _dims.index(min(_dims))
-        _split_axes = tuple(i for i in range(3) if i != _protrusion)
-
-        # Assign multicolor material (deterministic seed from obj file name)
-        _multicolor_seed = sum(ord(c) * (i + 1) for i, c in enumerate(obj_file)) % 100000
-        _multicolor_mat = _create_multicolor_material(
-            f'multicolor_{imported_name}', seed=_multicolor_seed,
-            split_axes=_split_axes)
-
-        # Store per-object data for later use in sample loop
-        if not hasattr(bpy, '_mc_data'):
-            bpy._mc_data = {}
-        bpy._mc_data[imported_name] = {
-            'seed': _multicolor_seed,
-            'split_axes': _split_axes,
-            'mat': _multicolor_mat,
-        }
+        # Solid color material: default blue, black for BLACK_OBJS
+        if stem in BLACK_OBJS:
+            _obj_color = OBJ_BLACK_COLOR
+        else:
+            _obj_color = (_rgb_bo.get('obj_r', 0.03), _rgb_bo.get('obj_g', 0.08),
+                          _rgb_bo.get('obj_b', 0.40), 1.0)
+        _solid_mat = _create_solid_material(f'solid_{imported_name}', _obj_color)
         obj_blender = bpy.data.objects[imported_name]
         obj_blender.data.materials.clear()
-        obj_blender.data.materials.append(_multicolor_mat)
+        obj_blender.data.materials.append(_solid_mat)
 
     # remove incomplete render batch
     if CONTINUE:
@@ -1426,6 +1626,10 @@ if __name__ == '__main__':
             json.dump(session, f, indent=2)
         print(f'新 session: {obj}, fixed_scale={fixed_scale:.4f}')
 
+    # RGB 高位相機距離依底板尺寸正規化（82mm 基準，一個 session 算一次）
+    rgb_cam_z_high, _rgb_bsz = _rgb_cam_z_for(obj, fixed_rotation, fixed_scale)
+    print(f'  RGB base_size={_rgb_bsz*1000:.1f}mm -> cam_z={rgb_cam_z_high*1000:.1f}mm')
+
     # generate samples
     valid_cells = session.get('valid_cells', None)
     sensor_width = session.get('_sensor_length_mm', 10.0) / 1000.0 * 2
@@ -1473,7 +1677,7 @@ if __name__ == '__main__':
 
             x = cx + ru(-jitter, jitter)
             y = cy + ru(-jitter, jitter)
-            z = ru(cell_depth_min, cell_depth_max)  # ✅ 用格子專屬深度
+            z = ru(PRESS_DEPTH_MIN, PRESS_DEPTH_MAX)  # 隨機按壓深度（覆蓋 session/cell 設定）
 
         else:
             grid_x = (sample_idx % grid_n) * sensor_step + X_MIN + sensor_step / 2
@@ -1484,7 +1688,7 @@ if __name__ == '__main__':
             a_x = fixed_rotation[0] + delta * 0.3
             a_y = fixed_rotation[1] + delta * 0.1
             a_z = fixed_rotation[2] + delta * 0.05
-            z = ru(OBJ_DEPTH_MIN, OBJ_DEPTH_MAX)
+            z = ru(PRESS_DEPTH_MIN, PRESS_DEPTH_MAX)  # 隨機按壓深度
 
         move_object_at_xy(obj, (x, y, z), (a_x, a_y, a_z), sensor_width, z_anchor=z_anchor)
 
@@ -1517,7 +1721,7 @@ if __name__ == '__main__':
             bpy.context.scene.render.filepath = tactile_path
             bpy.context.scene.frame_set(0)
             bpy.ops.render.render(write_still=True)
-            _boost_saturation(tactile_path + '.png', TACTILE_SAT_BOOST)
+            # post-fx (含 gel 變形 warp) 延後到 GT depth 生成後執行
 
             obj_data = bpy.data.objects[obj]
             world_matrix = obj_data.matrix_world
@@ -1527,7 +1731,7 @@ if __name__ == '__main__':
                 'obj_name': obj,
                 'sample_x': -(x - _bb_center_x),
                 'sample_y': y - _bb_center_y,
-                'sample_z': z,
+                'sample_z': z,   # 實際按壓深度（tactile 與 GT 同深度，real 慣例）
                 'location': list(obj_data.location),
                 'rotation_euler': list(obj_data.rotation_euler),
                 'scale': list(obj_data.scale),
@@ -1543,42 +1747,29 @@ if __name__ == '__main__':
                 json.dump(pose, f, indent=2)
 
             get_depth(os.path.join(sensor_dir, 'raw_data', f'{overall_idx_formatted}.npy'))
-            get_gt_depth(os.path.join(sensor_dir, 'raw_data', f'{overall_idx_formatted}_gt.npy'), obj)
+            _gt_npy_path = os.path.join(sensor_dir, 'raw_data', f'{overall_idx_formatted}_gt.npy')
+            get_gt_depth(_gt_npy_path, obj)
 
-            # Create per-sample material with correct cross center
-            from mathutils import Vector as _Vec
-            _obj_render = bpy.data.objects[obj]
-            _bbox = [_obj_render.matrix_world @ _Vec(c) for c in _obj_render.bound_box]
-            _bb_ctr = (_Vec((min(v.x for v in _bbox), min(v.y for v in _bbox), min(v.z for v in _bbox))) +
-                       _Vec((max(v.x for v in _bbox), max(v.y for v in _bbox), max(v.z for v in _bbox)))) / 2
-            _mc = bpy._mc_data[obj]
-            _sample_mat = _create_multicolor_material(
-                f'mc_{overall_idx}', seed=_mc['seed'],
-                cross_center=(_bb_ctr.x, _bb_ctr.y, _bb_ctr.z),
-                obj_rotation=tuple(_obj_render.rotation_euler),
-                split_axes=_mc['split_axes'])
-            print(f'    cross=({_bb_ctr.x*1000:.1f},{_bb_ctr.y*1000:.1f})mm rot={[round(r,2) for r in _obj_render.rotation_euler]}')
-            _obj_render.data.materials.clear()
-            _obj_render.data.materials.append(_sample_mat)
+            # tactile post-fx：gel 變形 warp（用 GT depth 梯度）+ 色彩調整
+            _tactile_post_fx(tactile_path + '.png', dmap_path=_gt_npy_path)
 
-            # RGB render (high camera)
+            # Platform 跟著物體的 z 旋轉（繞世界原點 = 按壓點）
+            _set_platform_rotation(a_z)
+
+            # RGB render (high camera) — solid color material, no per-sample material needed
             rgb_dir = os.path.join(sensor_dir, 'rgb')
             os.makedirs(rgb_dir, exist_ok=True)
-            render_rgb_sample(obj, 40.0,
-                              os.path.join(rgb_dir, overall_idx_formatted))
+            render_rgb_sample(obj, RGB_FOV,
+                              os.path.join(rgb_dir, overall_idx_formatted),
+                              cam_z=rgb_cam_z_high)
 
             # RGB render (contact camera) at same height as tactile
             tactile_cam_z = bpy.data.objects['Camera'].location[2]
             rgb_contact_dir = os.path.join(sensor_dir, 'rgb_contact')
             os.makedirs(rgb_contact_dir, exist_ok=True)
-            render_rgb_sample(obj, 40.0,
+            render_rgb_sample(obj, RGB_FOV,
                               os.path.join(rgb_contact_dir, overall_idx_formatted),
                               cam_z=tactile_cam_z)
-
-            # Restore original material and cleanup
-            _obj_render.data.materials.clear()
-            _obj_render.data.materials.append(_mc['mat'])
-            bpy.data.materials.remove(_sample_mat)
 
         overall_idx += 1
 

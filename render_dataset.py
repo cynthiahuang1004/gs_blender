@@ -30,11 +30,13 @@ from pathlib import Path
 from concurrent.futures import ProcessPoolExecutor, as_completed
 
 SCRIPT_DIR   = Path(__file__).parent
-BLENDER      = Path(r'C:\Program Files\Blender Foundation\Blender 4.5\blender.exe')
+BLENDER      = Path('/home/shared/blender-4.2.0-linux-x64/blender')
 BLEND_FILE   = SCRIPT_DIR / 'gelsight_sampler.blend'
 SCRIPTING    = SCRIPT_DIR / 'scripting.py'
-RENDERS_ROOT = SCRIPT_DIR / 'renders'
-FIXED_PARAMS = SCRIPT_DIR / 'bo_results' / 'tactile' / 'best_params.json'
+# Default output root is renders_v3 — the old renders/ dataset (pre-2026-07 params)
+# must never be overwritten. Override with --root if needed.
+RENDERS_ROOT = SCRIPT_DIR / 'renders_v3'
+FIXED_PARAMS = SCRIPT_DIR / 'bo_results' / 'tactile_v2' / 'best_params.json'
 RGB_PARAMS   = SCRIPT_DIR / 'bo_results' / 'rgb' / 'best_rgb_params.json'
 
 BLENDER_TIMEOUT = 7200  # 2 hours per session (generous)
@@ -150,7 +152,14 @@ def main():
                         help='Process objects in reverse alphabetical order')
     parser.add_argument('--workers', type=int, default=0,
                         help='Number of parallel workers (default: one per GPU)')
+    parser.add_argument('--root', type=str, default=None,
+                        help='Output root dir (default: renders_v3; the old renders/ '
+                             'dataset must not be overwritten)')
     args = parser.parse_args()
+
+    global RENDERS_ROOT
+    if args.root:
+        RENDERS_ROOT = Path(args.root) if os.path.isabs(args.root) else SCRIPT_DIR / args.root
 
     gpu_ids = [int(g) for g in args.gpus.split(',')]
     n_workers = args.workers if args.workers > 0 else len(gpu_ids)

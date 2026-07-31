@@ -116,6 +116,13 @@ def render(params):
             # Contrast
             if abs(params.get('contrast', 1.0) - 1.0) > 0.01:
                 img = np.clip((img.astype(np.float32) - 127.5) * params['contrast'] + 127.5, 0, 255).astype(np.uint8)
+            # Haze (milky gel scattering)
+            if params.get('haze', 0.0) > 0.01:
+                a = params['haze']
+                f = img.astype(np.float32)
+                glow = cv2.GaussianBlur(f, (0, 0), 8.0)
+                f = f * (1 - a) + glow * a + a * 30.0
+                img = np.clip(f, 0, 255).astype(np.uint8)
             cv2.imwrite(out_path, img)
             print(f'Saved: {out_path}')
             return out_path

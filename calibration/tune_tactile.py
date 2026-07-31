@@ -164,6 +164,16 @@ def render(params, obj_name='button'):
                 img = np.clip(img.astype(np.float32) * params['brightness'], 0, 255).astype(np.uint8)
             if abs(params.get('contrast', 1.0) - 1.0) > 0.01:
                 img = np.clip((img.astype(np.float32) - 127.5) * params['contrast'] + 127.5, 0, 255).astype(np.uint8)
+            if params.get('sharpen', 0.0) > 0.01:
+                soft = cv2.GaussianBlur(img.astype(np.float32), (0, 0), 1.5)
+                img = np.clip(img.astype(np.float32) + (img.astype(np.float32) - soft) * params['sharpen'], 0, 255).astype(np.uint8)
+            if params.get('haze', 0.0) > 0.01:
+                # milky gel scattering: blend with blurred version + slight white lift
+                a = params['haze']
+                f = img.astype(np.float32)
+                glow = cv2.GaussianBlur(f, (0, 0), 8.0)
+                f = f * (1 - a) + glow * a + a * 30.0
+                img = np.clip(f, 0, 255).astype(np.uint8)
 
             cv2.imwrite(out_path, img)
             print(f'Saved: {out_path}')
