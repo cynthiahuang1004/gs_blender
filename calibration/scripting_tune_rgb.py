@@ -124,7 +124,7 @@ world = bpy.data.worlds.get('World')
 if world and world.node_tree:
     bg_node = world.node_tree.nodes.get('Background')
     if bg_node:
-        bg_node.inputs['Color'].default_value = (0.25, 0.25, 0.25, 1.0)
+        bg_node.inputs['Color'].default_value = (0.75, 0.72, 0.55, 1.0)
         bg_node.inputs['Strength'].default_value = float(P.get('world_strength', 2.37))
 
 # ── Platform ──
@@ -139,8 +139,8 @@ teal_mat.use_nodes = True
 p_bsdf = teal_mat.node_tree.nodes.get('Principled BSDF')
 if p_bsdf:
     p_bsdf.inputs['Base Color'].default_value = (
-        float(P.get('plat_r', 0.226)), float(P.get('plat_g', 0.35)),
-        float(P.get('plat_b', 0.40)), 1.0)
+        float(P.get('plat_r', 128/255)), float(P.get('plat_g', 147/255)),
+        float(P.get('plat_b', 145/255)), 1.0)
     p_bsdf.inputs['Roughness'].default_value = float(P.get('plat_roughness', 0.35))
     p_bsdf.inputs['Specular IOR Level'].default_value = 0.6
     p_bsdf.inputs['Metallic'].default_value = float(P.get('plat_metallic', 0.582))

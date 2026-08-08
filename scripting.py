@@ -298,9 +298,9 @@ def _setup_platform():
     p_bsdf = teal_mat.node_tree.nodes.get('Principled BSDF')
     if p_bsdf:
         p_bsdf.inputs['Base Color'].default_value         = (
-            _rgb_bo.get('plat_r', 26/255),
-            _rgb_bo.get('plat_g', 115/255),
-            _rgb_bo.get('plat_b', 106/255), 1.0)
+            _rgb_bo.get('plat_r', 128/255),
+            _rgb_bo.get('plat_g', 147/255),
+            _rgb_bo.get('plat_b', 145/255), 1.0)
         p_bsdf.inputs['Roughness'].default_value          = _rgb_bo.get('plat_roughness', 0.25)
         p_bsdf.inputs['Specular IOR Level'].default_value = 0.6
         p_bsdf.inputs['Metallic'].default_value           = _rgb_bo.get('plat_metallic',  0.85)
@@ -364,7 +364,7 @@ def render_rgb_sample(obj_name, fov_deg, out_path, cam_z=None):
         if bg_node:
             orig_bg = (tuple(bg_node.inputs['Color'].default_value),
                        bg_node.inputs['Strength'].default_value)
-            bg_node.inputs['Color'].default_value    = (0.25, 0.25, 0.25, 1.0)
+            bg_node.inputs['Color'].default_value    = (0.75, 0.72, 0.55, 1.0)
             bg_node.inputs['Strength'].default_value = RGB_WORLD_STR
 
     vis_save = {}
@@ -1046,7 +1046,7 @@ def get_rgb_image(dir, obj_name, cam_z_override=None) -> None:
         bg_node = world.node_tree.nodes.get('Background')
         if bg_node:
             orig_bg_color = tuple(bg_node.inputs['Color'].default_value)
-            bg_node.inputs['Color'].default_value    = (0.45, 0.45, 0.45, 1.0)
+            bg_node.inputs['Color'].default_value    = (0.75, 0.72, 0.55, 1.0)
             bg_node.inputs['Strength'].default_value = 1.0
 
     # Disable compositor (avoids depth-tint from GelSight compositor nodes)
