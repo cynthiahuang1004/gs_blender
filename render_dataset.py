@@ -79,12 +79,12 @@ def _file_ok(p: Path) -> bool:
         return False
 
 
-def is_complete(session_dir: Path) -> bool:
+def is_complete(session_dir: Path, start: int = 0) -> bool:
     n = _n_expected(session_dir)
     if n == 0:
         return False
     sensor = session_dir / 'sensor_0000'
-    for i in range(n):
+    for i in range(start, n):
         idx = f'{i:04d}'
         files = [
             sensor / 'samples' / f'{idx}.png',
@@ -100,9 +100,11 @@ def is_complete(session_dir: Path) -> bool:
 
 
 def run_session(session_dir: Path, gpu_id: int = 0, cpu: bool = False,
-                threads: int = 0) -> bool:
+                threads: int = 0, start_idx: int = 0) -> bool:
     env = os.environ.copy()
     env['GELSIGHT_RENDER_DIR']   = str(session_dir)
+    if start_idx > 0:
+        env['GELSIGHT_START_IDX'] = str(start_idx)
     env['GELSIGHT_FIXED_PARAMS'] = str(FIXED_PARAMS)
     env['GELSIGHT_RGB_PARAMS']   = str(RGB_PARAMS)
     env['PYTHONUNBUFFERED']      = '1'
@@ -134,7 +136,7 @@ def run_session(session_dir: Path, gpu_id: int = 0, cpu: bool = False,
 
 def _worker(args):
     """Top-level function for ProcessPoolExecutor (must be picklable)."""
-    session_dir, gpu_id, index, total, cpu, threads = args
+    session_dir, gpu_id, index, total, cpu, threads, start_idx = args
     obj_name  = session_dir.parent.name
     sess_name = session_dir.name
     n_exp     = _n_expected(session_dir)
@@ -143,7 +145,8 @@ def _worker(args):
 
     print(f'{prefix}  ...', flush=True)
     t0 = time.time()
-    ok = run_session(session_dir, gpu_id=gpu_id, cpu=cpu, threads=threads)
+    ok = run_session(session_dir, gpu_id=gpu_id, cpu=cpu, threads=threads,
+                     start_idx=start_idx)
     elapsed = time.time() - t0
 
     if ok:
@@ -194,6 +197,9 @@ def main():
                         help='Render on CPU (hides CUDA devices, forces Cycles CPU)')
     parser.add_argument('--threads', type=int, default=0,
                         help='Blender threads per worker (-t); 0 = auto')
+    parser.add_argument('--start-idx', type=int, default=0,
+                        help='Skip samples below this index (cloud extension '
+                             'render without the original files, e.g. 200)')
     args = parser.parse_args()
 
     global RENDERS_ROOT
@@ -207,8 +213,8 @@ def main():
                                 exclude=set(args.exclude) if args.exclude else None,
                                 reverse=args.reverse)
     total    = len(sessions)
-    n_done   = sum(1 for s in sessions if is_complete(s))
-    todo     = [s for s in sessions if not is_complete(s)]
+    n_done   = sum(1 for s in sessions if is_complete(s, args.start_idx))
+    todo     = [s for s in sessions if not is_complete(s, args.start_idx)]
     n_todo   = len(todo)
 
     print('=' * 60)
@@ -234,7 +240,8 @@ def main():
     work_items = []
     for i, session_dir in enumerate(todo):
         gpu_id = gpu_ids[i % len(gpu_ids)]
-        work_items.append((session_dir, gpu_id, i + 1, n_todo, args.cpu, args.threads))
+        work_items.append((session_dir, gpu_id, i + 1, n_todo, args.cpu, args.threads,
+                           args.start_idx))
 
     with ProcessPoolExecutor(max_workers=n_workers) as executor:
         futures = {executor.submit(_worker, item): item for item in work_items}
