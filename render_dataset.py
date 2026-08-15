@@ -86,10 +86,11 @@ def is_complete(session_dir: Path, start: int = 0) -> bool:
     sensor = session_dir / 'sensor_0000'
     for i in range(start, n):
         idx = f'{i:04d}'
+        # rgb_contact is optional: cloud-rendered extension samples (0200+)
+        # were produced without it, they must still count as complete.
         files = [
             sensor / 'samples' / f'{idx}.png',
             sensor / 'rgb' / f'{idx}.png',
-            sensor / 'rgb_contact' / f'{idx}.png',
             sensor / 'raw_data' / f'{idx}.npy',
             sensor / 'raw_data' / f'{idx}_gt.npy',
             sensor / 'raw_data' / f'{idx}_pose.json',
