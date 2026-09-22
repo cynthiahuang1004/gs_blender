@@ -1182,7 +1182,8 @@ def _create_multicolor_material(name, seed, cross_center=(0, 0, 0), obj_rotation
 # 預設 = 原本的藍色（best_rgb_params 的 obj_r/g/b）；下列物體用黑色
 BLACK_OBJS = {
     'pattern_04_3_lines_angle_2', 'pattern_06_5_lines_angle_1',
-    'pattern_31_rod', 'pattern_32', 'pattern_35', 'pattern_36', 'pattern_37',
+    'pattern_31_rod', 'pattern_32', 'pattern_33',
+    'pattern_35', 'pattern_36', 'pattern_37',
 }
 OBJ_BLACK_COLOR = (0.02, 0.02, 0.02, 1.0)
 
