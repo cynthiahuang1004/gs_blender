@@ -24,8 +24,8 @@ except ImportError:
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 ROOT_DIR = os.path.dirname(SCRIPT_DIR)
 BLENDER_PATH = '/home/shared/blender-4.2.0-linux-x64/blender'
-TARGET_PATH = os.path.join(ROOT_DIR, 'real_data_test', 'base_tactile_images', '0.jpg')
-RESULTS_DIR = os.path.join(ROOT_DIR, 'bo_results', 'tactile_v2')
+TARGET_PATH = os.environ.get('GELSIGHT_BO_TARGET', os.path.join(ROOT_DIR, 'real_data_test', 'base_tactile_images', '0.jpg'))
+RESULTS_DIR = os.environ.get('GELSIGHT_BO_RESULTS', os.path.join(ROOT_DIR, 'bo_results', 'tactile_v2'))
 os.makedirs(RESULTS_DIR, exist_ok=True)
 
 TARGET_SIZE = (128, 128)
