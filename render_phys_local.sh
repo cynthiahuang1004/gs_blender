@@ -4,6 +4,7 @@
 #
 #   PHYS_REAL_ROOT=/path/to/phys_inputs/real_filtered   # unpacked phys_inputs.tar (pose json + GT npy)
 #   PHYS_OUT=/path/to/real_filtered_phys                 # output; send this folder back to the server
+#   PHYS_NO_WARP=1                                       # deterministic render without the random gel warp -> use PHYS_OUT=.../real_filtered_phys_nowarp
 #   BLENDER=/path/to/blender                             # default: `blender` on PATH
 #   ./render_phys_local.sh [obj ...]                     # default: all 12 objects in phys_frames/
 #
@@ -17,6 +18,6 @@ for obj in "${objs[@]}"; do
   echo "$(date +%m-%d\ %H:%M) start $obj"
   GELSIGHT_FIXED_PARAMS=bo_results/tactile_v2/best_params.json \
     "$BLENDER" -t ${PHYS_THREADS:-8} --background gelsight_sampler.blend --python render_real_pose_tactile.py -- \
-    --obj "$obj" --frames "phys_frames/$obj.json" ${PHYS_OUT:+--out "$PHYS_OUT"} 2>&1 | grep -E "\[phys\]|Traceback|Error"
+    --obj "$obj" --frames "phys_frames/$obj.json" ${PHYS_OUT:+--out "$PHYS_OUT"} ${PHYS_NO_WARP:+--no-warp} 2>&1 | grep -E "\[phys\]|Traceback|Error"
 done
 echo "$(date +%m-%d\ %H:%M) all done"

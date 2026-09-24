@@ -51,7 +51,12 @@ def main():
     ap.add_argument('--frames', required=True)
     ap.add_argument('--out', default=os.environ.get('PHYS_OUT', '/media/hdd2/ihsuan/gs_blender/real_filtered_phys'))
     ap.add_argument('--session', default='session_000')
+    ap.add_argument('--no-warp', action='store_true', help='skip the random gel-deform warp (GELSIGHT_NO_WARP=1)')
     args = ap.parse_args(argv)
+    if args.no_warp:
+        os.environ['GELSIGHT_NO_WARP'] = '1'
+        if args.out.endswith('real_filtered_phys'):
+            args.out += '_nowarp'
 
     frames = json.load(open(args.frames))
     unit_in = os.path.join(REAL_ROOT, args.obj, args.session, 'sensor_0000')

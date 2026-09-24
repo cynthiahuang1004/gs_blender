@@ -1343,6 +1343,8 @@ def _gel_deform_warp(rgb, dmap=None):
 def _tactile_post_fx(png_path, dmap_path=None):
     """gel-deform warp → saturation → brightness → contrast → haze.
     dmap_path: GT depth npy for the contact-driven warp (None → bg warp only)."""
+    # GELSIGHT_NO_WARP=1: skip the random gel-deform warp (deterministic render aligned with the GT depth;
+    # used for the physics-conditioned GAN inputs). Colour post-fx unchanged.
     img_bpy = bpy.data.images.load(png_path)
     W, H = img_bpy.size[0], img_bpy.size[1]
     px = np.empty(W * H * 4, dtype=np.float32)
@@ -1357,7 +1359,8 @@ def _tactile_post_fx(png_path, dmap_path=None):
         _dmap = np.load(dmap_path)
         # png is stored bottom-up relative to the npy orientation
         _dmap = np.flipud(_dmap)
-    rgb = np.clip(_gel_deform_warp(rgb, _dmap), 0, 1)
+    if not os.environ.get('GELSIGHT_NO_WARP'):
+        rgb = np.clip(_gel_deform_warp(rgb, _dmap), 0, 1)
 
     # Saturation (HSV S-channel scale)
     if abs(TACTILE_POST_SATURATION - 1.0) > 0.01:
