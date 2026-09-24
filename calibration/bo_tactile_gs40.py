@@ -120,13 +120,20 @@ def score(rendered_u8, target, mask, saturation, brightness, contrast):
     r_lab = cv2.cvtColor((rb * 255).astype(np.uint8), cv2.COLOR_BGR2LAB).astype(np.float32)
     t_lab = cv2.cvtColor((tb * 255).astype(np.uint8), cv2.COLOR_BGR2LAB).astype(np.float32)
     lab_mse = np.mean(((r_lab - t_lab) ** 2)[~mask]) / (255.0 ** 2)
+    # unblurred LAB term (masked): penalises flat renders that only match the mean colour
+    r_lab0 = cv2.cvtColor((rendered * 255).astype(np.uint8), cv2.COLOR_BGR2LAB).astype(np.float32)
+    t_lab0 = cv2.cvtColor((target * 255).astype(np.uint8), cv2.COLOR_BGR2LAB).astype(np.float32)
+    lab_mse = 0.5 * lab_mse + 0.5 * np.mean(((r_lab0 - t_lab0) ** 2)[~mask]) / (255.0 ** 2)
+    # illumination-gradient term: the target's smooth colour gradients must be reproduced (not a flat image)
+    gr = np.linalg.norm(np.gradient(rb.mean(2)), axis=0); gt = np.linalg.norm(np.gradient(tb.mean(2)), axis=0)
+    grad_l1 = float(np.mean(np.abs(gr - gt)[~mask]) / max(np.mean(gt[~mask]), 1e-6))
     s = ssim((tb * 255).astype(np.uint8), (rb * 255).astype(np.uint8), channel_axis=2)
     bh = 0.0
     for c in range(3):
         h1 = cv2.calcHist([(target * 255).astype(np.uint8)], [c], (~mask).astype(np.uint8), [32], [0, 256]).ravel()
         h2 = cv2.calcHist([(rendered * 255).astype(np.uint8)], [c], None, [32], [0, 256]).ravel()
         bh += cv2.compareHist(h1.astype(np.float32), h2.astype(np.float32), cv2.HISTCMP_BHATTACHARYYA) / 3
-    return 0.5 * (1.0 - min(lab_mse * 50, 1.0)) + 0.3 * s + 0.2 * (1.0 - bh)
+    return 0.4 * (1.0 - min(lab_mse * 50, 1.0)) + 0.25 * s + 0.15 * (1.0 - bh) + 0.2 * (1.0 - min(grad_l1, 1.0))
 
 
 def main():
@@ -134,6 +141,8 @@ def main():
     ap.add_argument('--n_iter', type=int, default=250)
     ap.add_argument('--init', type=int, default=30)
     ap.add_argument('--seed', type=int, default=42)
+    ap.add_argument('--init-json', default=None, help='hand-tuned params json to probe first (BO refines around it)')
+    ap.add_argument('--n-random', type=int, default=0, help='random-search samples before BO (0 = BO init only)')
     a = ap.parse_args()
     target, mask = load_target()
     print(f'Target: {TARGET_PATH}\nBO: {a.init} init + {a.n_iter} iter, {len(PBOUNDS)} params', flush=True)
@@ -155,6 +164,9 @@ def main():
         return s
 
     opt = BayesianOptimization(f=objective, pbounds=PBOUNDS, random_state=a.seed, verbose=0)
+    if a.init_json:
+        p0 = json.load(open(a.init_json)); p0 = {k: float(np.clip(p0.get(k, (lo + hi) / 2), lo, hi)) for k, (lo, hi) in PBOUNDS.items()}
+        opt.probe(params=p0, lazy=True); print('probing hand-tuned init first', flush=True)
     opt.maximize(init_points=a.init, n_iter=a.n_iter)
     bi = cv2.imread(os.path.join(RESULTS_DIR, 'best_render.png'))
     ti = cv2.resize(cv2.imread(TARGET_PATH), (bi.shape[1], bi.shape[0]))
