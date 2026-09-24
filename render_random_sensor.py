@@ -40,7 +40,25 @@ def main():
         sess = f'session_{si:03d}'; unit_in = f'{SIM_ROOT}/{a.obj}/{sess}/sensor_0000'; unit_out = f'{a.out}/{a.obj}/{sess}/sensor_0000'
         os.makedirs(f'{unit_out}/samples', exist_ok=True); os.makedirs(f'{unit_out}/calibration', exist_ok=True)
         random.seed(a.seed * 1000 + si * 37 + hash(a.obj) % 1000)      # one random sensor per (obj, session)
-        sensor = S.create_sensor(); sensor.randomize(); sensor.apply()
+        sensor = S.create_sensor(); sensor.randomize()
+        # WIDE appearance randomisation (SITR-style 'random sensor design'): every emitter gets an
+        # independent random strength and a random saturated colour, gel optics random; the GEOMETRY is
+        # kept identical to the calibrated renderer so the existing depth / normal / pose labels stay valid.
+        import colorsys
+        def rand_col():
+            r, g, b = colorsys.hsv_to_rgb(random.random(), random.uniform(0.6, 1.0), 1.0)
+            return (r, g, b, 1)
+        for i in range(4):
+            sensor.emittors[i][0] = random.uniform(10.0, 90.0); sensor.emittors[i][1] = rand_col()
+        sensor.lg_str = random.uniform(10.0, 90.0); sensor.lg_color = rand_col()[:3]
+        sensor.rg_str = random.uniform(10.0, 90.0); sensor.rg_color = rand_col()[:3]
+        sensor.gel_roughness = random.uniform(0.2, 0.8); sensor.gel_fac = random.uniform(0.1, 0.5)
+        sensor.scale = 0.4918; sensor.light_z = -0.004139; sensor.fov = 60.0; sensor.smoothness = 35
+        sensor.length = 0.008751; sensor.angle = 'str'; sensor.light_type = 'long'
+        sensor.apply()
+        json.dump({'session': si, 'emitters': [[e[0], list(e[1])] for e in sensor.emittors], 'lg': [sensor.lg_str, list(sensor.lg_color)],
+                   'rg': [sensor.rg_str, list(sensor.rg_color)], 'gel_roughness': sensor.gel_roughness, 'gel_fac': sensor.gel_fac},
+                  open(f'{unit_out}/sensor_params.json', 'w'), indent=1)
         # background of this random sensor
         S.move_object('IndenterSurface', (0, 0, -1), (0, 0, 0)) if 'IndenterSurface' in bpy.data.objects else None
         obj.location = (0, 0, 1.0); bpy.context.scene.frame_set(0)
